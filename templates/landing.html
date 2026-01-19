@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}CareSync AI - Autonomous Patient Care Coordination System{% endblock %}
+
+{% block body_class %}landing-page{% endblock %}
+
+{% block content %}
+<div class="landing-container">
+    <div class="landing-hero">
+        <div class="hero-content">
+            <div class="logo-container">
+                <i class="bi bi-heart-pulse-fill logo-icon"></i>
+                <h1 class="brand-name">CareSync AI</h1>
+            </div>
+            <p class="tagline">Autonomous Patient Care Coordination System</p>
+            <p class="description">
+                Real-time patient monitoring, AI-powered risk detection, and instant emergency alerts
+            </p>
+            
+            <div class="row mt-5">
+                <div class="col-lg-6">
+                    <div class="feature-cards">
+                        <div class="feature-card">
+                            <i class="bi bi-activity"></i>
+                            <h3>Real-Time Monitoring</h3>
+                            <p>Continuous vital sign tracking</p>
+                        </div>
+                        <div class="feature-card">
+                            <i class="bi bi-bell-fill"></i>
+                            <h3>Instant Alerts</h3>
+                            <p>Emergency notifications instantly</p>
+                        </div>
+                        <div class="feature-card">
+                            <i class="bi bi-brain"></i>
+                            <h3>AI Risk Detection</h3>
+                            <p>Predictive analytics for early warnings</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-lg-6">
+                    <div class="row">
+                        <div class="col-12 mb-3">
+                            <div class="login-card-inline">
+                                <div class="login-header">
+                                    <h5>Staff Portal Login</h5>
+                                    <p class="text-muted small">Admin • Doctor • Nurse</p>
+                                </div>
+                                
+                                <form method="POST" action="{{ url_for('staff_login') }}" class="login-form">
+                                    <div class="mb-3">
+                                        <label for="staff_id" class="form-label">Staff ID</label>
+                                        <input type="text" class="form-control" id="staff_id" name="staff_id" 
+                                               placeholder="e.g., ADM0001" required>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <label for="password" class="form-label">Password</label>
+                                        <input type="password" class="form-control" id="password" name="password" 
+                                               placeholder="Enter password" required>
+                                    </div>
+                                    
+                                    <button type="submit" class="btn btn-primary w-100">
+                                        <i class="bi bi-box-arrow-in-right me-2"></i>Login
+                                    </button>
+                                </form>
+                                
+                                <div class="text-center mt-3">
+                                    <a href="{{ url_for('view_credentials') }}" class="btn btn-link btn-sm">
+                                        <i class="bi bi-key"></i> View Demo Credentials
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-12">
+                            <div class="login-card-inline discharged-card">
+                                <div class="login-header">
+                                    <h5><i class="bi bi-robot me-2"></i>CareSync AI Assistant</h5>
+                                    <p class="text-muted small">Post-Discharge Care Support</p>
+                                </div>
+                                
+                                <p class="small text-muted mb-3">
+                                    <i class="bi bi-info-circle me-2"></i>Discharged patients can access personalized AI-powered support for medication guidance, follow-up care, and health concerns.
+                                </p>
+                                
+                                <a href="{{ url_for('discharged_portal') }}" class="btn btn-info w-100">
+                                    <i class="bi bi-chat-dots me-2"></i>Access AI Assistant
+                                </a>
+                                
+                                <div class="text-center mt-2">
+                                    <small class="text-muted">
+                                        <i class="bi bi-globe me-1"></i>Available in 4 languages
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="cta-buttons mt-4">
+                <a href="{{ url_for('init_data') }}" class="btn btn-outline-primary">
+                    <i class="bi bi-database-fill-gear me-2"></i>Initialize Demo Data
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="landing-visual">
+        <div class="pulse-animation">
+            <div class="pulse-ring"></div>
+            <div class="pulse-ring delay-1"></div>
+            <div class="pulse-ring delay-2"></div>
+        </div>
+    </div>
+</div>
+
+<style>
+.landing-container { min-height: 100vh; padding: 40px 20px; }
+.hero-content { max-width: 1200px; margin: 0 auto; }
+.login-card-inline { 
+    background: white; 
+    padding: 30px; 
+    border-radius: 12px; 
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+}
+.login-header h5 { color: #1a1a2e; margin-bottom: 5px; }
+.login-form .form-label { font-weight: 600; color: #333; }
+.login-form .form-control { border-radius: 8px; border: 1px solid #ddd; }
+.feature-cards { display: grid; gap: 20px; }
+.feature-card { 
+    padding: 20px; 
+    text-align: center; 
+    background: rgba(255,255,255,0.1); 
+    border-radius: 8px;
+    color: white;
+}
+.feature-card i { font-size: 32px; margin-bottom: 10px; }
+.discharged-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: 2px solid rgba(255,255,255,0.3);
+}
+.discharged-card .login-header h5,
+.discharged-card .login-header p {
+    color: white;
+}
+.discharged-card .text-muted {
+    color: rgba(255,255,255,0.8) !important;
+}
+.discharged-card small.text-muted {
+    color: rgba(255,255,255,0.9) !important;
+}
+.cta-buttons { text-align: center; }</style>
+{% endblock %}
