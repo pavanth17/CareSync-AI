@@ -5,16 +5,60 @@ from functools import wraps
 from flask import render_template, redirect, url_for, request, flash, session, Response, jsonify
 from flask_login import current_user
 from app import app, db
-from models import StaffMember, Patient, VitalSign, Alert, Medication, TreatmentLog, MedicationAdministration, Shift, ShiftHandoff, DoctorNote, RiskAssessment, ChatMessage, LabReport, AppointmentRequest
+from models import StaffMember, Patient, VitalSign, Alert, Medication, TreatmentLog, MedicationAdministration, Shift, ShiftHandoff, DoctorNote, RiskAssessment, ChatMessage, LabReport, AppointmentRequest, AuditLog, Round, Ward
 # Removed Replit-specific auth integration; using local session-based auth instead
 from synthetic_data import initialize_synthetic_data
-from vital_simulator import update_patient_vitals, get_and_clear_new_alerts, get_live_patient_vitals
-from predictive_analytics import risk_predictor, analyze_all_patients
 
 logging.basicConfig(level=logging.DEBUG)
 
 # Replit auth blueprint removed for local hosting
 
+def generate_fallback_response(patient, user_message, language='en'):
+    """Generate intelligent fallback responses based on patient data"""
+    msg_lower = user_message.lower()
+    
+    # Get patient data
+    active_meds = Medication.query.filter_by(patient_id=patient.id, is_active=True).all()
+    latest_vital = patient.vitals.order_by(VitalSign.recorded_at.desc()).first()
+    
+    if language == 'hi':
+        if any(word in msg_lower for word in ['medicine', 'medication', 'दवा']):
+            if active_meds:
+                meds_text = ', '.join([f"{m.name} ({m.dosage})" for m in active_meds])
+                return f"आपकी वर्तमान दवाएं: {meds_text}। कृपया अपने डॉक्टर से परामर्श करें।"
+            return "आपके पास वर्तमान में कोई सक्रिय दवा नहीं है।"
+        elif any(word in msg_lower for word in ['blood pressure', 'bp', 'ब्लड प्रेशर']):
+            if latest_vital:
+                return f"आपका नवीनतम रक्तचाप: {latest_vital.blood_pressure_systolic}/{latest_vital.blood_pressure_diastolic} mmHg है।"
+            return "रक्तचाप डेटा उपलब्ध नहीं है।"
+        elif any(word in msg_lower for word in ['diagnosis', 'बीमारी', 'रोग']):
+            return f"आपका निदान: {patient.diagnosis}। अधिक जानकारी के लिए अपने डॉक्टर से बात करें।"
+        return "नमस्ते, मैं CareSync सहायक हूँ। कृपया अपने डॉक्टर से परामर्श करें।"
+    
+    # English fallback
+    if any(word in msg_lower for word in ['medicine', 'medication', 'drug', 'pills']):
+        if active_meds:
+            meds_text = ', '.join([f"{m.name} ({m.dosage})" for m in active_meds])
+            return f"Your current medications: {meds_text}. Please consult your doctor for more details."
+        return "You currently have no active medications on record."
+    
+    elif any(word in msg_lower for word in ['blood pressure', 'bp', 'vitals', 'vital signs']):
+        if latest_vital:
+            return f"Your latest blood pressure: {latest_vital.blood_pressure_systolic}/{latest_vital.blood_pressure_diastolic} mmHg. Heart rate: {latest_vital.heart_rate} bpm. SpO2: {latest_vital.oxygen_saturation}%."
+        return "Vital signs data not available."
+    
+    elif any(word in msg_lower for word in ['diagnosis', 'condition', 'disease']):
+        return f"Your diagnosis: {patient.diagnosis}. For detailed information, please consult your doctor."
+    
+    elif any(word in msg_lower for word in ['appointment', 'schedule', 'book']):
+        appointments = AppointmentRequest.query.filter_by(patient_id=patient.id, status='confirmed').count()
+        return f"You have {appointments} confirmed appointments. To book a new appointment, use the Appointments tab."
+    
+    elif any(word in msg_lower for word in ['emergency', 'urgent', 'help', 'pain']):
+        return "If you're experiencing an emergency, please call 911 or visit your nearest emergency room immediately."
+    
+    # Default response
+    return "Hello! I'm CareSync Assistant. I can help with information about your medications, vitals, and health records. Please contact your healthcare provider for medical advice."
 
 @app.before_request
 def make_session_permanent():
@@ -62,6 +106,12 @@ def role_required(*roles):
     return decorator
 
 
+@app.route('/health')
+def health_check():
+    """Simple health check endpoint"""
+    return jsonify({'status': 'ok', 'message': 'Server is running'}), 200
+
+
 @app.route('/')
 def index():
     staff = get_staff_user()
@@ -92,20 +142,57 @@ def staff_login():
         if staff and staff.check_password(password):
             session['staff_id'] = staff.id
             session['staff_role'] = staff.role
+            
+            # Audit Login
+            try:
+                log = AuditLog(
+                    action='LOGIN',
+                    table_name='auth',
+                    record_id=staff.id,
+                    field_name='session',
+                    old_value=None,
+                    new_value='active',
+                    changed_by_id=staff.id
+                )
+                db.session.add(log)
+                db.session.commit()
+            except Exception as e:
+                logging.error(f"Failed to log login audit: {e}")
+                
             flash(f'Welcome back, {staff.full_name}!', 'success')
             return redirect(url_for('dashboard'))
         else:
             flash('Invalid Staff ID / email or password.', 'danger')
+            # Optional: Log failed attempts if needed (careful with spam)
     
     return render_template('index.html')
 
-
 @app.route('/logout')
-def staff_logout():
+def logout():
+    staff = get_staff_user()
+    if staff:
+        try:
+            log = AuditLog(
+                action='LOGOUT',
+                table_name='auth',
+                record_id=staff.id,
+                field_name='session',
+                old_value='active',
+                new_value='terminated',
+                changed_by_id=staff.id
+            )
+            db.session.add(log)
+            db.session.commit()
+        except:
+            pass
+            
     session.pop('staff_id', None)
     session.pop('staff_role', None)
     flash('You have been logged out.', 'info')
-    return redirect(url_for('index'))
+    return redirect(url_for('staff_login'))
+
+
+
 
 
 @app.route('/dashboard')
@@ -121,6 +208,44 @@ def dashboard():
         return redirect(url_for('nurse_dashboard'))
     
     return redirect(url_for('index'))
+
+
+@app.route('/ward/<department_name>')
+@staff_login_required
+def ward_dashboard(department_name):
+    """Specific dashboard for a department/ward"""
+    staff = get_staff_user()
+    
+    # Fetch patients in this department, exclude discharged
+    patients = Patient.query.filter(
+        Patient.department == department_name, 
+        Patient.status != 'discharged'
+    ).order_by(Patient.room_number).all()
+    
+    # Quick stats
+    critical_count = 0
+    stable_count = 0
+    for p in patients:
+        lv = p.latest_vitals
+        if lv and lv.status == 'critical':
+            critical_count += 1
+        elif lv and lv.status == 'normal':
+            stable_count += 1
+            
+    # Staff on duty in this department
+    staff_on_duty_count = StaffMember.query.filter_by(
+        department=department_name, 
+        is_on_duty=True
+    ).count()
+    
+    return render_template('ward_dashboard.html', 
+        staff=staff,
+        department=department_name,
+        patients=patients,
+        critical_count=critical_count,
+        stable_count=stable_count,
+        staff_on_duty_count=staff_on_duty_count
+    )
 
 
 @app.route('/admin')
@@ -253,6 +378,32 @@ def admin_patients():
     return render_template('admin/patients.html', staff=staff, patients=patients)
 
 
+@app.route('/admin/appointments')
+@staff_login_required
+@admin_required
+def admin_appointments():
+    staff = get_staff_user()
+    appointments = AppointmentRequest.query.order_by(AppointmentRequest.requested_at.desc()).all()
+    return render_template('admin/appointments.html', staff=staff, appointments=appointments)
+
+
+@app.route('/admin/appointment/<int:appt_id>/confirm', methods=['POST'])
+@staff_login_required
+def confirm_appointment(appt_id):
+    # Depending on requirements, maybe only admin or doctors can confirm
+    staff = get_staff_user()
+    if staff.role not in ['admin', 'doctor']:
+        flash('Permission denied.', 'danger')
+        return redirect(url_for('dashboard'))
+        
+    appt = AppointmentRequest.query.get_or_404(appt_id)
+    appt.status = 'confirmed'
+    db.session.commit()
+    flash('Appointment confirmed.', 'success')
+    return redirect(request.referrer or url_for('admin_appointments'))
+
+
+
 @app.route('/doctor')
 @staff_login_required
 @role_required('doctor', 'admin')
@@ -281,8 +432,94 @@ def doctor_dashboard():
         staff=staff,
         patients=patients,
         active_alerts=active_alerts,
-        critical_alerts=critical_alerts
+        critical_alerts=critical_alerts,
+        todays_rounds=Round.query.filter(
+            Round.doctor_id == staff.id, 
+            Round.scheduled_time >= datetime.now().replace(hour=0, minute=0, second=0),
+            Round.scheduled_time < datetime.now().replace(hour=0, minute=0, second=0) + __import__('datetime').timedelta(days=1)
+        ).order_by(Round.scheduled_time).all()
     )
+
+
+@app.route('/doctor/schedule-round', methods=['POST'])
+@staff_login_required
+@role_required('doctor')
+def schedule_round():
+    staff = get_staff_user()
+    patient_id = request.form.get('patient_id')
+    scheduled_time_str = request.form.get('scheduled_time')
+    notes = request.form.get('notes')
+
+    if not patient_id or not scheduled_time_str:
+        flash('Missing required fields', 'danger')
+        return redirect(url_for('doctor_dashboard'))
+
+    try:
+        # Combine today's date with the time
+        time_obj = datetime.strptime(scheduled_time_str, '%H:%M').time()
+        scheduled_datetime = datetime.combine(datetime.now().date(), time_obj)
+        
+        round_entry = Round(
+            doctor_id=staff.id,
+            patient_id=patient_id,
+            scheduled_time=scheduled_datetime,
+            notes=notes,
+            status='pending'
+        )
+        db.session.add(round_entry)
+        db.session.commit()
+        flash('Round scheduled successfully', 'success')
+    except Exception as e:
+        flash(f'Error scheduling round: {e}', 'danger')
+
+    return redirect(url_for('doctor_dashboard'))
+
+
+@app.route('/doctor/round/<int:round_id>/complete', methods=['POST'])
+@staff_login_required
+@role_required('doctor')
+def complete_round(round_id):
+    round_entry = Round.query.get_or_404(round_id)
+    if round_entry.doctor_id != session.get('staff_id'):
+         flash('Unauthorized', 'danger')
+         return redirect(url_for('doctor_dashboard'))
+    
+    round_entry.status = 'completed'
+    db.session.commit()
+    flash('Round marked as completed', 'success')
+    return redirect(url_for('doctor_dashboard'))
+
+
+@app.route('/doctor/note/<int:patient_id>/add', methods=['GET', 'POST'])
+@staff_login_required
+@role_required('doctor')
+def add_doctor_note(patient_id):
+    staff = get_staff_user()
+    patient = Patient.query.get_or_404(patient_id)
+
+    if request.method == 'POST':
+        note_type = request.form.get('note_type')
+        subjective = request.form.get('subjective')
+        objective = request.form.get('objective')
+        assessment = request.form.get('assessment')
+        plan = request.form.get('plan')
+
+        note = DoctorNote(
+            patient_id=patient.id,
+            doctor_id=staff.id,
+            note_type=note_type,
+            subjective=subjective,
+            objective=objective,
+            assessment=assessment,
+            plan=plan
+        )
+        db.session.add(note)
+        db.session.commit()
+        flash('Note added successfully', 'success')
+        return redirect(url_for('patient_detail', patient_id=patient.id))
+
+    return render_template('doctor/add_note.html', staff=staff, patient=patient)
+
 
 
 @app.route('/nurse')
@@ -325,6 +562,22 @@ def patient_detail(patient_id):
     try:
         staff = get_staff_user()
         patient = Patient.query.get_or_404(patient_id)
+        
+        # Audit View (Full Record Access)
+        try:
+            log = AuditLog(
+                action='VIEW',
+                table_name='patients',
+                record_id=patient.id,
+                field_name='all',
+                old_value=None,
+                new_value='full_detail_access',
+                changed_by_id=staff.id
+            )
+            db.session.add(log)
+            db.session.commit()
+        except Exception as e:
+            logging.error(f"Audit Log Error: {e}")
         
         vitals = VitalSign.query.filter_by(patient_id=patient_id).order_by(VitalSign.recorded_at.desc()).limit(50).all()
         medications = Medication.query.filter_by(patient_id=patient_id, is_active=True).all()
@@ -382,11 +635,58 @@ def acknowledge_alert(alert_id):
     return redirect(request.referrer or url_for('dashboard'))
 
 
+@app.route('/api/trigger-emergency-alert', methods=['POST'])
+@staff_login_required
+def trigger_emergency_alert():
+    """Trigger a random patient emergency alert for demo/testing purposes"""
+    try:
+        staff = get_staff_user()
+        
+        # Get admitted patients
+        patients = Patient.query.filter(Patient.status.in_(['admitted', 'icu', 'emergency'])).all()
+        
+        if not patients:
+            return jsonify({'success': False, 'message': 'No patients available'}), 400
+        
+        # Pick a random patient
+        import random
+        patient = random.choice(patients)
+        
+        # Create emergency alert
+        alert = Alert(
+            patient_id=patient.id,
+            alert_type='oxygen_critical',
+            severity='critical',
+            message=f'EMERGENCY: {patient.full_name} - Oxygen saturation critically low (88%)',
+            details={'reason': 'Demo emergency alert - oxygen saturation critical'},
+            created_by_id=staff.id,
+            is_acknowledged=False
+        )
+        
+        db.session.add(alert)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'alert_id': alert.id,
+            'patient_id': patient.id,
+            'patient_name': patient.full_name,
+            'severity': alert.severity,
+            'message': alert.message
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"Error triggering emergency alert: {e}")
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/vitals/stream')
 @staff_login_required
 def vitals_stream():
     def generate():
         import time
+        from vital_simulator import update_patient_vitals, get_and_clear_new_alerts, get_live_patient_vitals
         while True:
             update_patient_vitals()
             
@@ -499,6 +799,7 @@ def utility_processor():
 @app.route('/patient/<int:patient_id>/risk-analysis')
 @staff_login_required
 def patient_risk_analysis(patient_id):
+    from predictive_analytics import risk_predictor
     staff = get_staff_user()
     patient = Patient.query.get_or_404(patient_id)
     
@@ -529,6 +830,7 @@ def patient_risk_analysis(patient_id):
 @app.route('/api/risk-analysis/<int:patient_id>')
 @staff_login_required
 def api_risk_analysis(patient_id):
+    from predictive_analytics import risk_predictor
     analysis = risk_predictor.analyze_patient_risk(patient_id)
     return jsonify(analysis)
 
@@ -536,6 +838,7 @@ def api_risk_analysis(patient_id):
 @app.route('/api/risk-analysis/all')
 @staff_login_required
 def api_all_risk_analysis():
+    from predictive_analytics import analyze_all_patients
     results = analyze_all_patients()
     return jsonify(results)
 
@@ -852,6 +1155,9 @@ def acknowledge_handoff(handoff_id):
 @staff_login_required
 def patient_history(patient_id):
     staff = get_staff_user()
+    if not staff:
+        flash('You must be logged in as staff to access this page.', 'danger')
+        return redirect(url_for('staff_login'))
     patient = Patient.query.get_or_404(patient_id)
     
     vitals = VitalSign.query.filter_by(patient_id=patient_id).order_by(VitalSign.recorded_at.desc()).limit(100).all()
@@ -877,36 +1183,7 @@ def patient_history(patient_id):
     )
 
 
-@app.route('/patient/<int:patient_id>/add-note', methods=['GET', 'POST'])
-@staff_login_required
-@role_required('doctor', 'admin')
-def add_doctor_note(patient_id):
-    staff = get_staff_user()
-    patient = Patient.query.get_or_404(patient_id)
-    
-    if request.method == 'POST':
-        note_type = request.form.get('note_type', 'progress')
-        subjective = request.form.get('subjective', '').strip()
-        objective = request.form.get('objective', '').strip()
-        assessment = request.form.get('assessment', '').strip()
-        plan = request.form.get('plan', '').strip()
-        
-        note = DoctorNote(
-            patient_id=patient_id,
-            doctor_id=staff.id,
-            note_type=note_type,
-            subjective=subjective,
-            objective=objective,
-            assessment=assessment,
-            plan=plan
-        )
-        db.session.add(note)
-        db.session.commit()
-        
-        flash('Doctor note added successfully.', 'success')
-        return redirect(url_for('patient_history', patient_id=patient_id))
-    
-    return render_template('add_note.html', staff=staff, patient=patient)
+
 
 
 @app.route('/patient/<int:patient_id>/add-treatment', methods=['GET', 'POST'])
@@ -939,11 +1216,25 @@ def add_treatment(patient_id):
     return render_template('add_treatment.html', staff=staff, patient=patient)
 
 
-# ===== DISCHARGED PATIENT POST-CARE PORTAL =====
+# ===== UNIVERSAL PATIENT PORTAL =====
 
-@app.route('/discharged-portal', methods=['GET', 'POST'])
-def discharged_portal():
-    """Discharged patient login portal"""
+def get_logged_in_patient():
+    if 'patient_id' in session:
+        return Patient.query.get(session['patient_id'])
+    return None
+
+def patient_login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'patient_id' not in session:
+            flash('Please log in to access this page.', 'warning')
+            return redirect(url_for('patient_login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/patient-login', methods=['GET', 'POST'])
+def patient_login():
+    """Universal patient login portal (Current & Discharged)"""
     if request.method == 'POST':
         patient_id_str = request.form.get('patient_id', '').strip().upper()
         phone = request.form.get('phone', '').strip()
@@ -954,547 +1245,512 @@ def discharged_portal():
 
         norm_input_phone = norm_phone(phone)
 
-        # Query discharged patient by ID
-        patient = Patient.query.filter_by(patient_id=patient_id_str, status='discharged').first()
+        # Query patient by ID (any status)
+        patient = Patient.query.filter_by(patient_id=patient_id_str).first()
         
         # Verify phone matches (normalized)
         if patient and patient.phone:
             if norm_phone(patient.phone) == norm_input_phone:
-                session['discharged_patient_id'] = patient.id
-                flash('Welcome! You can now chat with our AI assistant.', 'success')
-                return redirect(url_for('discharged_dashboard'))
+                session['patient_id'] = patient.id
+                flash(f'Welcome back, {patient.first_name}!', 'success')
+                return redirect(url_for('patient_portal_dashboard'))
         
         # No valid match
         flash('Invalid Patient ID or phone number. Please check and try again.', 'danger')
     
-    return render_template('discharged_portal.html')
+    return render_template('patient_login.html')
 
 
-@app.route('/discharged-dashboard')
-def discharged_dashboard():
-    """Discharged patient chat dashboard with CareSync AI Assistant"""
-    patient_id = session.get('discharged_patient_id')
-    if not patient_id:
-        flash('Please log in to access this page.', 'warning')
-        return redirect(url_for('discharged_portal'))
+@app.route('/discharged-portal', methods=['GET', 'POST'])
+def discharged_portal():
+    """Discharged patient portal - redirects to patient login"""
+    return redirect(url_for('patient_login'))
+
+
+@app.route('/patient-portal/dashboard')
+@patient_login_required
+def patient_portal_dashboard():
+    """Main dashboard for the patient portal"""
+    patient = get_logged_in_patient()
+    if not patient:
+        session.pop('patient_id', None)
+        return redirect(url_for('patient_login'))
     
+    # helper for upcoming appointments
+    upcoming_appointments_count = AppointmentRequest.query.filter(
+        AppointmentRequest.patient_id == patient.id,
+        AppointmentRequest.status.in_(['pending', 'confirmed']),
+        AppointmentRequest.preferred_date >= datetime.now().date()
+    ).count()
+
+    # helper for active meds
+    active_meds_count = Medication.query.filter_by(patient_id=patient.id, is_active=True).count()
+
+    # helper for lab reports (assuming LabReport model exists, if not catch error)
+    lab_reports_count = 0
     try:
-        patient = Patient.query.get(patient_id)
-        if not patient:
-            flash('Patient record not found.', 'danger')
-            return redirect(url_for('discharged_portal'))
-        
-        if patient.status != 'discharged':
-            flash('This portal is only for discharged patients.', 'danger')
-            return redirect(url_for('discharged_portal'))
-        
-        # Get chat history
-        chat_history = ChatMessage.query.filter_by(patient_id=patient_id).order_by(ChatMessage.created_at.asc()).all()
-        
-        return render_template('discharged_dashboard.html',
-            patient=patient,
-            chat_history=chat_history
-        )
-    except Exception as e:
-        logging.error(f"Error loading discharged dashboard for patient {patient_id}: {e}")
-        flash('An error occurred while loading your dashboard.', 'danger')
-        return redirect(url_for('discharged_portal'))
+        lab_reports_count = LabReport.query.filter_by(patient_id=patient.id).count()
+    except Exception:
+        pass # LabReport might not exist yet
+
+    # latest vital
+    latest_vital = patient.vitals.order_by(VitalSign.recorded_at.desc()).first()
+
+    # Recent Activity (Mockup aggregation)
+    recent_activity = []
+    
+    # 1. Recent Meds
+    recent_meds = Medication.query.filter_by(patient_id=patient.id).order_by(Medication.start_date.desc()).limit(3).all()
+    for m in recent_meds:
+        recent_activity.append({
+            'type': 'medication',
+            'title': f'Started {m.name}',
+            'description': f'Dosage: {m.dosage}',
+            'time': m.start_date.strftime('%Y-%m-%d'),
+            'timestamp': datetime.combine(m.start_date, datetime.min.time())
+        })
+
+    # 2. Recent Vitals
+    recent_vitals = patient.vitals.order_by(VitalSign.recorded_at.desc()).limit(3).all()
+    for v in recent_vitals:
+        recent_activity.append({
+            'type': 'vital',
+            'title': 'Vitals Recorded',
+            'description': f'BP: {v.blood_pressure_systolic}/{v.blood_pressure_diastolic}',
+            'time': v.recorded_at.strftime('%Y-%m-%d %H:%M'),
+            'timestamp': v.recorded_at
+        })
+    
+    # Sort by timestamp desc
+    recent_activity.sort(key=lambda x: x['timestamp'], reverse=True)
+    recent_activity = recent_activity[:5]
+
+    return render_template('patient_portal_dashboard.html',
+        patient=patient,
+        active_meds_count=active_meds_count,
+        upcoming_appointments_count=upcoming_appointments_count,
+        latest_vital=latest_vital,
+        lab_reports_count=lab_reports_count,
+        recent_activity=recent_activity
+    )
+
+@app.route('/patient-portal/history')
+@patient_login_required
+def patient_portal_history():
+    patient = get_logged_in_patient()
+    notes = DoctorNote.query.filter_by(patient_id=patient.id).order_by(DoctorNote.created_at.desc()).all()
+    # treatments could be added if we create a model, for now just notes
+    return render_template('patient_portal_history.html', patient=patient, notes=notes, treatments=[])
+
+@app.route('/patient-portal/medications')
+@patient_login_required
+def patient_portal_medications():
+    patient = get_logged_in_patient()
+    medications = Medication.query.filter_by(patient_id=patient.id).order_by(Medication.start_date.desc()).all()
+    return render_template('patient_portal_medications.html', patient=patient, medications=medications)
+
+@app.route('/patient-portal/appointments')
+@patient_login_required
+def patient_portal_appointments():
+    patient = get_logged_in_patient()
+    appointments = AppointmentRequest.query.filter_by(patient_id=patient.id).order_by(AppointmentRequest.created_at.desc()).all()
+    doctors = StaffMember.query.filter_by(role='doctor').all()
+    return render_template('patient_portal_appointments.html', patient=patient, appointments=appointments, doctors=doctors)
+
+@app.route('/patient-portal/chat')
+@patient_login_required
+def patient_portal_chat():
+    patient = get_logged_in_patient()
+    chat_history = ChatMessage.query.filter_by(patient_id=patient.id).order_by(ChatMessage.created_at.asc()).all()
+    return render_template('patient_portal_chat.html', patient=patient, chat_history=chat_history)
+
+@app.route('/patient-logout')
+def patient_logout():
+    session.pop('patient_id', None)
+    flash('You have been logged out.', 'info')
+    return redirect(url_for('patient_login'))
 
 
+# ===== PATIENT API ENDPOINTS =====
 
-@app.route('/api/discharged/chat', methods=['POST'])
-def discharged_chat():
-    """Chat API for discharged patients with Gemini"""
+@app.route('/api/patient/<int:patient_id>/chat', methods=['POST'])
+def patient_chat(patient_id):
+    """Chat API with multi-language support"""
     from app import gemini_model
     import json
     
-    patient_id = session.get('discharged_patient_id')
-    if not patient_id:
+    # Authorization
+    staff = get_staff_user()
+    if not staff and session.get('patient_id') != patient_id:
         return jsonify({'error': 'Unauthorized'}), 401
     
-    data = request.get_json()
+    data = request.get_json() or {}
     user_message = data.get('message', '').strip()
     new_chat_flag = data.get('new_chat', False)
     language = data.get('language', 'en').lower()
     
     if not user_message:
         return jsonify({'error': 'Message cannot be empty'}), 400
-    
-    # If Gemini isn't configured (no API key), provide a polite local fallback
-    if not gemini_model:
-        fallback_local = {
-            'en': "Hi, I'm CareSync Assistant. I can't access the AI service right now, but please contact your healthcare provider for urgent medical advice.",
-            'hi': "नमस्ते, मैं CareSync सहायक हूँ। वर्तमान में AI सेवा उपलब्ध नहीं है। तत्काल सहायता के लिए अपने स्वास्थ्य प्रदाता से संपर्क करें।",
-            'ta': "வணக்கம், நான் CareSync உதவியாளர். தற்போது AI சேவை அணுக முடியவில்லை. உடனடி உதவிக்கு உங்கள் மருத்துவர்களை தொடர்பு கொள்ளுங்கள்.",
-            'te': "హలో, నేను CareSync సహాయకుడు. ప్రస్తుతం AI సేవ అందుబాటులో లేదు. తక్షణ సహాయానికి మీ వైద్యుడిని సంప్రదించండి."
-        }
-        ai_response = fallback_local.get(language, fallback_local['en'])
-
-        # Store assistant fallback for continuity
-        try:
-            ai_msg = ChatMessage(
-                patient_id=patient_id,
-                role='assistant',
-                message=ai_response,
-                language=language
-            )
-            db.session.add(ai_msg)
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-
-        return jsonify({'role': 'assistant', 'message': ai_response, 'language': language}), 200
     
     patient = Patient.query.get_or_404(patient_id)
     
     # Store user message
-    user_msg = ChatMessage(
-        patient_id=patient_id,
-        role='patient',
-        message=user_message,
-        language=language
-    )
-    db.session.add(user_msg)
-    db.session.commit()
-    
-    # Build context and language prompt
-    language_names = {
-        'en': 'English',
-        'hi': 'Hindi',
-        'ta': 'Tamil',
-        'te': 'Telugu'
-    }
-    lang_name = language_names.get(language, 'English')
-    
-    # Get recent chat history for context unless a fresh chat is requested
-    recent_chat = []
-    if not new_chat_flag:
-        recent_chat = ChatMessage.query.filter_by(patient_id=patient_id).order_by(
-            ChatMessage.created_at.desc()
-        ).limit(6).all()
-        recent_chat.reverse()
-    
-    context = f"You are CareSync AI Assistant, a helpful medical advisor for discharged patients. "
-    context += f"Patient Name: {patient.full_name}, Patient ID: {patient.patient_id}. "
-    context += f"Recent Diagnosis: {patient.diagnosis}. "
-    
-    # Get latest vitals for context
-    latest_vital = patient.vitals.first()
-    if latest_vital:
-        vital_context = f"Latest vitals: HR {latest_vital.heart_rate} bpm, BP {latest_vital.blood_pressure_systolic}/{latest_vital.blood_pressure_diastolic} mmHg, O2 {latest_vital.oxygen_saturation}%, Temp {latest_vital.temperature}°F. "
-        context += vital_context
-    
-    # Get active medications for context
-    active_meds = Medication.query.filter_by(patient_id=patient_id, is_active=True).all()
-    if active_meds:
-        med_names = ', '.join([m.name for m in active_meds[:5]])
-        context += f"Active medications: {med_names}. "
-    
-    context += f"Reply ONLY in {lang_name}. Keep responses concise and helpful. If describing urgent symptoms, suggest visiting a doctor and offer appointment booking."
-    
-    # Build conversation for Gemini
-    messages = []
-    for msg in recent_chat:
-        if msg.role == 'patient':
-            messages.append({'role': 'user', 'parts': [msg.message]})
-        else:
-            messages.append({'role': 'model', 'parts': [msg.message]})
-    
-    # Add current message
-    messages.append({'role': 'user', 'parts': [f"{context}\n\nPatient: {user_message}"]})
-    
-    try:
-        # Call Gemini API with safety settings
-        response = gemini_model.generate_content(
-            [msg['parts'][0] for msg in messages],
-            generation_config={'temperature': 0.7, 'max_output_tokens': 500}
-        )
-        
-        # Handle blocked responses or empty responses robustly
-        ai_response = None
-        try:
-            # response.text accessor can raise if the model returned no valid Part
-            ai_text = None
-            try:
-                ai_text = response.text
-            except Exception as inner_e:
-                logging.warning(f"Could not access response.text: {inner_e}")
-                # Try alternative locations on the response object
-                candidates = getattr(response, 'candidates', None)
-                if candidates:
-                    texts = [getattr(c, 'text', None) for c in candidates]
-                    ai_text = ' '.join([t for t in texts if t]) if texts else None
-
-            if not ai_text or not isinstance(ai_text, str) or not ai_text.strip():
-                ai_response = (
-                    "I appreciate your question. I'm working to provide you with the best response. "
-                    "Please try again or contact your healthcare provider for immediate medical advice."
-                )
-            else:
-                ai_response = ai_text
-        except Exception as e:
-            logging.error(f"Error processing Gemini response object: {e}")
-            ai_response = (
-                "I appreciate your question. I'm working to provide you with the best response. "
-                "Please try again or contact your healthcare provider for immediate medical advice."
-            )
-        
-        # Store AI response
-        ai_msg = ChatMessage(
-            patient_id=patient_id,
-            role='assistant',
-            message=ai_response,
-            language=language
-        )
-        db.session.add(ai_msg)
-        db.session.commit()
-        
-        return jsonify({
-            'role': 'assistant',
-            'message': ai_response,
-            'language': language
-        })
-    
-    except Exception as e:
-        logging.error(f"Gemini API error: {e}")
-        # Log and return a friendly assistant fallback (HTTP 200) so UI remains responsive
-        fallback_msg = (
-            "I appreciate your question. I'm currently unable to generate a full response. "
-            "Please try again in a moment or contact your healthcare provider for urgent concerns."
-        )
-        logging.info(f"Returning assistant fallback for patient {patient_id}")
-
-        # Store fallback as assistant message for continuity
-        try:
-            ai_msg = ChatMessage(
-                patient_id=patient_id,
-                role='assistant',
-                message=fallback_msg,
-                language=language
-            )
-            db.session.add(ai_msg)
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-
-        return jsonify({'role': 'assistant', 'message': fallback_msg, 'language': language}), 200
-
-
-@app.route('/api/discharged/clear-history', methods=['POST'])
-def discharged_clear_history():
-    """Clear chat history for the logged-in discharged patient."""
-    patient_id = session.get('discharged_patient_id')
-    if not patient_id:
-        return jsonify({'error': 'Unauthorized'}), 401
-
-    try:
-        ChatMessage.query.filter_by(patient_id=patient_id).delete()
-        db.session.commit()
-        return jsonify({'ok': True}), 200
-    except Exception as e:
-        logging.error(f"Error clearing chat history for patient {patient_id}: {e}")
-        db.session.rollback()
-        return jsonify({'error': 'Could not clear history'}), 500
-
-
-@app.route('/api/discharged/book-appointment', methods=['POST'])
-def discharged_book_appointment():
-    """Allow discharged patient to request an appointment via the chat UI."""
-    patient_id = session.get('discharged_patient_id')
-    if not patient_id:
-        return jsonify({'error': 'Unauthorized'}), 401
-
-    data = request.get_json() or {}
-    preferred_date = data.get('preferred_date')  # ISO string expected
-    preferred_time = data.get('preferred_time')
-    doctor_id = data.get('doctor_id')
-    notes = data.get('notes', '')
-
-    try:
-        preferred_dt = None
-        if preferred_date:
-            preferred_dt = datetime.fromisoformat(preferred_date)
-
-        appt = AppointmentRequest(
-            patient_id=patient_id,
-            preferred_date=preferred_dt,
-            preferred_time=preferred_time,
-            doctor_id=doctor_id,
-            notes=notes,
-            status='pending'
-        )
-        db.session.add(appt)
-        db.session.commit()
-
-        return jsonify({'ok': True, 'appointment_id': appt.id, 'status': appt.status}), 201
-    except Exception as e:
-        logging.error(f"Error creating appointment request: {e}")
-        db.session.rollback()
-        return jsonify({'error': 'Could not create appointment request'}), 500
-
-
-@app.route('/api/discharged/summary')
-def discharged_summary():
-    """Return a short AI-influenced risk summary for the logged-in discharged patient."""
-    patient_id = session.get('discharged_patient_id')
-    if not patient_id:
-        return jsonify({'error': 'Unauthorized'}), 401
-
-    try:
-        # Basic risk analysis (may consult AI) - keep this first so heavy work is encapsulated
-        analysis = risk_predictor.analyze_patient_risk(patient_id)
-
-        # Normalize predictions to a friendly default when empty
-        preds = analysis.get('predictions') or []
-        if not preds:
-            preds = ['No specific predictions at this time.']
-
-        # Attach patient-level information so the frontend can render a full summary
-        patient = Patient.query.get(patient_id)
-        if not patient:
-            return jsonify({'error': 'Patient not found'}), 404
-
-        # Lab results (most recent first, limit to 10)
-        try:
-            labs = [
-                {
-                    'test_name': lr.test_name,
-                    'result': lr.result,
-                    'units': lr.units,
-                    'normal_range': lr.normal_range,
-                    'reported_at': lr.reported_at.isoformat() if lr.reported_at else None,
-                    'file_url': getattr(lr, 'file_url', None)
-                }
-                for lr in LabReport.query.filter_by(patient_id=patient_id).order_by(LabReport.reported_at.desc()).limit(10).all()
-            ]
-        except Exception:
-            labs = []
-
-        # Medications / prescriptions (active and recent)
-        try:
-            meds = [
-                {
-                    'name': m.name,
-                    'dosage': m.dosage,
-                    'frequency': m.frequency,
-                    'route': m.route,
-                    'start_date': m.start_date.isoformat() if m.start_date else None,
-                    'end_date': m.end_date.isoformat() if m.end_date else None,
-                    'notes': m.notes
-                }
-                for m in Medication.query.filter_by(patient_id=patient_id).order_by(Medication.start_date.desc()).limit(20).all()
-            ]
-        except Exception:
-            meds = []
-
-        payload = {
-            'name': patient.full_name,
-            'patient_id': patient.patient_id,
-            'mobile': patient.phone or '',
-            'age': patient.age,
-            'admission_date': patient.admission_date.isoformat() if patient.admission_date else None,
-            'discharge_date': patient.discharge_date.isoformat() if patient.discharge_date else None,
-            'address': patient.address or '',
-            'health_issue': patient.diagnosis or '',
-            'lab_results': labs,
-            'medical_prescription': meds,
-            # Risk analysis fields
-            'risk_level': (analysis.get('risk_level') or 'stable'),
-            'risk_score': int(analysis.get('risk_score') or 0),
-            'predictions': preds,
-            'analyzed_at': analysis.get('analyzed_at'),
-        }
-
-        return jsonify(payload), 200
-    except Exception as e:
-        logging.error(f"Error computing summary for discharged patient {patient_id}: {e}")
-        return jsonify({'error': 'Could not compute summary'}), 500
-
-
-@app.route('/api/patient/<int:patient_id>/chat', methods=['POST'])
-def patient_chat(patient_id):
-    """Chat API accessible to logged-in staff or the discharged patient themselves."""
-    from app import gemini_model
-
-    # Authorization: allow if staff is logged in or the discharged patient session matches
-    staff = get_staff_user()
-    if not staff and session.get('discharged_patient_id') != patient_id:
-        return jsonify({'error': 'Unauthorized'}), 401
-
-    data = request.get_json() or {}
-    user_message = data.get('message', '').strip()
-    new_chat_flag = data.get('new_chat', False)
-    language = data.get('language', 'en').lower()
-
-    if not user_message:
-        return jsonify({'error': 'Message cannot be empty'}), 400
-
-    # Fallback if Gemini not configured
-    if not getattr(gemini_model, '__call__', True) and not gemini_model:
-        fallback_local = {
-            'en': "Hi, I'm CareSync Assistant. I can't access the AI service right now, but please contact your healthcare provider for urgent medical advice.",
-            'hi': "नमस्ते, मैं CareSync सहायक हूँ। वर्तमान में AI सेवा उपलब्ध नहीं है। तत्काल सहायता के लिए अपने स्वास्थ्य प्रदाता से संपर्क करें।",
-            'ta': "வணக்கம், நான் CareSync உதவியாளர். தற்போது AI சேவை அணுக முடியவில்லை. உடனடி உதவிக்கு உங்கள் மருத்துவர்களை தொடர்பு கொள்ளுங்கள்.",
-            'te': "హలో, నేను CareSync సహాయకుడు. ప్రస్తుతం AI సేవ అందుబాటులో లేదు. తక్షణ సహాయానికి మీ వైద్యుడిని సంప్రదించండి."
-        }
-        ai_response = fallback_local.get(language, fallback_local['en'])
-        try:
-            ai_msg = ChatMessage(patient_id=patient_id, role='assistant', message=ai_response, language=language)
-            db.session.add(ai_msg)
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-        return jsonify({'role': 'assistant', 'message': ai_response, 'language': language}), 200
-
-    patient = Patient.query.get_or_404(patient_id)
-
-    # Store message (from staff or patient) as 'patient' role so AI context treats it as user input
     user_msg = ChatMessage(patient_id=patient_id, role='patient', message=user_message, language=language)
     db.session.add(user_msg)
     db.session.commit()
-
-    # Build context
-    language_names = {'en': 'English', 'hi': 'Hindi', 'ta': 'Tamil', 'te': 'Telugu'}
-    lang_name = language_names.get(language, 'English')
-
-    recent_chat = []
-    if not new_chat_flag:
-        recent_chat = ChatMessage.query.filter_by(patient_id=patient_id).order_by(ChatMessage.created_at.desc()).limit(6).all()
-        recent_chat.reverse()
-
-    context = f"You are CareSync AI Assistant, a helpful medical advisor for patients. Patient Name: {patient.full_name}, Patient ID: {patient.patient_id}. Recent Diagnosis: {patient.diagnosis}. "
-    latest_vital = patient.vitals.first()
-    if latest_vital:
-        context += f"Latest vitals: HR {latest_vital.heart_rate} bpm, BP {latest_vital.blood_pressure_systolic}/{latest_vital.blood_pressure_diastolic} mmHg, O2 {latest_vital.oxygen_saturation}%, Temp {latest_vital.temperature}°F. "
-    active_meds = Medication.query.filter_by(patient_id=patient_id, is_active=True).all()
-    if active_meds:
-        med_names = ', '.join([m.name for m in active_meds[:5]])
-        context += f"Active medications: {med_names}. "
-
-    context += f"Reply ONLY in {lang_name}. Keep responses concise and helpful. If describing urgent symptoms, suggest visiting a doctor and offer appointment booking."
-
-    messages = []
-    for msg in recent_chat:
-        if msg.role == 'patient':
-            messages.append({'role': 'user', 'parts': [msg.message]})
-        else:
-            messages.append({'role': 'model', 'parts': [msg.message]})
-
-    messages.append({'role': 'user', 'parts': [f"{context}\n\nPatient: {user_message}"]})
-
-    try:
-        response = gemini_model.generate_content([m['parts'][0] for m in messages], generation_config={'temperature': 0.7, 'max_output_tokens': 500})
-        ai_text = None
+    
+    # Try Gemini first if available
+    ai_response = None
+    if gemini_model:
         try:
-            ai_text = response.text
-        except Exception:
-            candidates = getattr(response, 'candidates', None)
-            if candidates:
-                texts = [getattr(c, 'text', None) for c in candidates]
-                ai_text = ' '.join([t for t in texts if t]) if texts else None
-
-        if not ai_text:
-            ai_response = "I appreciate your question. I'm working to provide you with the best response. Please try again or contact your healthcare provider for immediate medical advice."
-        else:
-            ai_response = ai_text
-
+            recent_chat = ChatMessage.query.filter_by(patient_id=patient_id).order_by(ChatMessage.created_at.desc()).limit(6).all()
+            recent_chat.reverse()
+            
+            lang_name = {'en':'English', 'hi':'Hindi', 'ta':'Tamil', 'te':'Telugu', 'ml':'Malayalam'}.get(language, 'English')
+            
+            context = f"Patient: {patient.full_name}. Diagnosis: {patient.diagnosis}. "
+            lv = patient.vitals.order_by(VitalSign.recorded_at.desc()).first()
+            if lv:
+                context += f"Latest Vitals: HR {lv.heart_rate}, BP {lv.blood_pressure_systolic}/{lv.blood_pressure_diastolic}, SpO2 {lv.oxygen_saturation}%. "
+            
+            active_meds = Medication.query.filter_by(patient_id=patient_id, is_active=True).all()
+            if active_meds:
+                med_list = [f"{m.name} ({m.dosage}, {m.frequency})" for m in active_meds]
+                context += f"Active Meds: {', '.join(med_list)}. "
+                
+            context += f"Reply in {lang_name}. Be concise, empathetic. If emergency suspected, advise ER immediately."
+            
+            messages = [m.message for m in recent_chat]
+            messages.append(f"{context} Patient: {user_message}")
+            
+            response = gemini_model.generate_content(messages)
+            if hasattr(response, 'text') and response.text:
+                ai_response = response.text
+        except Exception as e:
+            logging.debug(f"Gemini unavailable, using fallback: {str(e)[:80]}")
+    
+    # Use fallback if Gemini not available or failed
+    if not ai_response:
+        ai_response = generate_fallback_response(patient, user_message, language)
+    
+    try:
         ai_msg = ChatMessage(patient_id=patient_id, role='assistant', message=ai_response, language=language)
         db.session.add(ai_msg)
         db.session.commit()
-
+        return jsonify({'role': 'assistant', 'message': ai_response, 'language': language, 'message_id': ai_msg.id})
+    except:
+        db.session.rollback()
         return jsonify({'role': 'assistant', 'message': ai_response, 'language': language})
-    except Exception as e:
-        logging.error(f"Gemini API error for patient chat: {e}")
-        fallback_msg = "I appreciate your question. I'm currently unable to generate a full response. Please try again in a moment or contact your healthcare provider for urgent concerns."
-        try:
-            ai_msg = ChatMessage(patient_id=patient_id, role='assistant', message=fallback_msg, language=language)
-            db.session.add(ai_msg)
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-        return jsonify({'role': 'assistant', 'message': fallback_msg, 'language': language}), 200
 
+@app.route('/api/chat/feedback/<int:message_id>', methods=['POST'])
+def chat_feedback(message_id):
+    """Record helpfulness feedback for a chat message"""
+    # Auth check (staff or patient owner)
+    staff = get_staff_user()
+    data = request.get_json() or {}
+    
+    msg = ChatMessage.query.get_or_404(message_id)
+    
+    # Simple ownership check
+    if not staff and session.get('patient_id') != msg.patient_id:
+        return jsonify({'error': 'Unauthorized'}), 401
+        
+    is_helpful = data.get('is_helpful')
+    if is_helpful is not None:
+        msg.is_helpful = bool(is_helpful)
+        
+    feedback_text = data.get('feedback_text')
+    if feedback_text:
+        msg.feedback_text = feedback_text
+        
+    db.session.commit()
+    return jsonify({'success': True})
 
 @app.route('/api/patient/<int:patient_id>/clear-history', methods=['POST'])
 def patient_clear_history(patient_id):
-    """Clear chat history for a specific patient (staff or patient action)."""
     staff = get_staff_user()
-    if not staff and session.get('discharged_patient_id') != patient_id:
+    if not staff and session.get('patient_id') != patient_id:
         return jsonify({'error': 'Unauthorized'}), 401
-
-    try:
-        ChatMessage.query.filter_by(patient_id=patient_id).delete()
-        db.session.commit()
-        return jsonify({'ok': True}), 200
-    except Exception as e:
-        logging.error(f"Error clearing chat history for patient {patient_id}: {e}")
-        db.session.rollback()
-        return jsonify({'error': 'Could not clear history'}), 500
-
+    
+    ChatMessage.query.filter_by(patient_id=patient_id).delete()
+    db.session.commit()
+    return jsonify({'ok': True})
 
 @app.route('/api/patient/<int:patient_id>/book-appointment', methods=['POST'])
 def patient_book_appointment(patient_id):
-    """Create an appointment request on behalf of a patient (staff or patient action)."""
+    """Book appointment with intelligent doctor allocation"""
+    from appointment_routing import allocate_appointment
+    
     staff = get_staff_user()
-    if not staff and session.get('discharged_patient_id') != patient_id:
+    patient_in_session = session.get('patient_id')
+    if not staff and patient_in_session != patient_id:
         return jsonify({'error': 'Unauthorized'}), 401
-
+        
     data = request.get_json() or {}
-    preferred_date = data.get('preferred_date')
-    preferred_time = data.get('preferred_time')
-    doctor_id = data.get('doctor_id')
-    notes = data.get('notes', '')
-
-    # If staff is a doctor and no doctor_id provided, default to them
-    if not doctor_id and staff and staff.role == 'doctor':
-        doctor_id = staff.id
-
     try:
-        preferred_dt = None
-        if preferred_date:
-            try:
-                preferred_dt = datetime.fromisoformat(preferred_date)
-            except Exception:
-                preferred_dt = None
+        pref_date = datetime.fromisoformat(data.get('preferred_date')) if data.get('preferred_date') else None
+    except:
+        pref_date = None
+    
+    # Create appointment with all new fields
+    appt = AppointmentRequest(
+        patient_id=patient_id,
+        preferred_date=pref_date,
+        preferred_time=data.get('preferred_time'),
+        doctor_id=data.get('doctor_id'),
+        notes=data.get('notes', ''),
+        appointment_type=data.get('appointment_type', 'routine'),
+        department=data.get('department', ''),
+        language_preference=data.get('language', 'en'),
+        urgency=data.get('urgency', 'normal'),
+        source=data.get('source', 'patient_portal'),
+        status='pending'
+    )
+    db.session.add(appt)
+    db.session.commit()
+    
+    # Try intelligent doctor allocation if no doctor specified
+    if not appt.doctor_id and appt.appointment_type != 'emergency':
+        allocated_doctor = allocate_appointment(appt)
+        if allocated_doctor:
+            appt.status = 'confirmed'
+            db.session.commit()
+    
+    return jsonify({
+        'ok': True, 
+        'appointment_id': appt.id,
+        'status': appt.status,
+        'allocated_by_system': appt.allocated_by_system,
+        'routing_score': float(appt.routing_score) if appt.routing_score else None
+    })
 
-        appt = AppointmentRequest(
-            patient_id=patient_id,
-            preferred_date=preferred_dt,
-            preferred_time=preferred_time,
-            doctor_id=doctor_id,
-            notes=notes,
-            status='pending'
-        )
-        db.session.add(appt)
+
+# ===== NEW APPOINTMENT SYSTEM ENDPOINTS =====
+
+@app.route('/api/appointment/translations/<language>', methods=['GET'])
+def get_appointment_translations(language='en'):
+    """Get appointment form translations"""
+    from appointment_routing import get_appointment_translations
+    
+    translations = get_appointment_translations(language)
+    return jsonify(translations)
+
+
+@app.route('/api/patient/<int:patient_id>/medical-records', methods=['GET'])
+@patient_login_required
+def get_patient_medical_records(patient_id):
+    """Get comprehensive medical records including notes, treatments, vitals, medications, alerts"""
+    
+    # Verify authorization
+    patient = Patient.query.get_or_404(patient_id)
+    if session.get('patient_id') != patient_id:
+        staff = get_staff_user()
+        if not staff or (staff.id != patient.assigned_doctor_id and staff.id != patient.assigned_nurse_id):
+            return jsonify({'error': 'Unauthorized'}), 401
+    
+    # Get doctor notes
+    doctor_notes = DoctorNote.query.filter_by(patient_id=patient_id).order_by(
+        DoctorNote.created_at.desc()
+    ).all()
+    
+    notes_data = [{
+        'id': note.id,
+        'type': note.note_type,
+        'doctor': note.doctor.full_name if note.doctor else 'Unknown',
+        'subjective': note.subjective,
+        'objective': note.objective,
+        'assessment': note.assessment,
+        'plan': note.plan,
+        'date': note.created_at.isoformat()
+    } for note in doctor_notes]
+    
+    # Get treatment logs
+    treatments = TreatmentLog.query.filter_by(patient_id=patient_id).order_by(
+        TreatmentLog.performed_at.desc()
+    ).all()
+    
+    treatments_data = [{
+        'id': treatment.id,
+        'type': treatment.treatment_type,
+        'description': treatment.description,
+        'notes': treatment.notes,
+        'staff': treatment.staff.full_name if treatment.staff else 'Unknown',
+        'date': treatment.performed_at.isoformat()
+    } for treatment in treatments]
+    
+    # Get vitals history (last 30)
+    vitals = VitalSign.query.filter_by(patient_id=patient_id).order_by(
+        VitalSign.recorded_at.desc()
+    ).limit(30).all()
+    
+    vitals_data = [{
+        'id': vital.id,
+        'heart_rate': vital.heart_rate,
+        'blood_pressure_systolic': vital.blood_pressure_systolic,
+        'blood_pressure_diastolic': vital.blood_pressure_diastolic,
+        'oxygen_saturation': vital.oxygen_saturation,
+        'temperature': vital.temperature,
+        'respiratory_rate': vital.respiratory_rate,
+        'status': vital.status,
+        'date': vital.recorded_at.isoformat()
+    } for vital in vitals]
+    
+    # Get medications
+    medications = Medication.query.filter_by(patient_id=patient_id).all()
+    
+    meds_data = [{
+        'id': med.id,
+        'name': med.name,
+        'dosage': med.dosage,
+        'frequency': med.frequency,
+        'route': med.route,
+        'is_active': med.is_active,
+        'start_date': med.start_date.isoformat() if med.start_date else None,
+        'end_date': med.end_date.isoformat() if med.end_date else None,
+        'prescribed_by': med.prescribed_by.full_name if med.prescribed_by else 'Unknown',
+        'notes': med.notes
+    } for med in medications]
+    
+    # Get alerts
+    alerts = Alert.query.filter_by(patient_id=patient_id).order_by(
+        Alert.created_at.desc()
+    ).limit(20).all()
+    
+    alerts_data = [{
+        'id': alert.id,
+        'type': alert.alert_type,
+        'severity': alert.severity,
+        'title': alert.title,
+        'message': alert.message,
+        'is_acknowledged': alert.is_acknowledged,
+        'date': alert.created_at.isoformat()
+    } for alert in alerts]
+    
+    return jsonify({
+        'patient': {
+            'id': patient.id,
+            'name': patient.full_name,
+            'diagnosis': patient.diagnosis,
+            'status': patient.status,
+            'room': patient.room_number,
+            'bed': patient.bed_number
+        },
+        'doctor_notes': notes_data,
+        'treatments': treatments_data,
+        'vitals_history': vitals_data,
+        'medications': meds_data,
+        'alerts': alerts_data
+    })
+
+
+@app.route('/api/landing-page/book-appointment', methods=['POST'])
+def landing_page_book_appointment():
+    """Book appointment directly from landing page (for new/guest patients)"""
+    from appointment_routing import allocate_appointment
+    
+    data = request.get_json() or {}
+    
+    # For landing page bookings, we might not have a patient ID yet
+    # Try to find or create patient
+    phone = data.get('phone', '').strip()
+    email = data.get('email', '').strip()
+    first_name = data.get('first_name', '').strip()
+    last_name = data.get('last_name', '').strip()
+    
+    if not (phone or email) or not (first_name and last_name):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    # Try to find existing patient
+    patient = None
+    if phone:
+        patient = Patient.query.filter_by(phone=phone).first()
+    if not patient and email:
+        patient = Patient.query.filter_by(email=email).first()
+    
+    # If patient doesn't exist, create new patient record
+    if not patient:
+        try:
+            # Generate patient ID
+            last_patient = Patient.query.order_by(Patient.patient_id.desc()).first()
+            if last_patient:
+                patient_num = int(last_patient.patient_id.replace('PAT', '')) + 1
+            else:
+                patient_num = 1
+            
+            patient = Patient(
+                patient_id=f'PAT{patient_num:06d}',
+                first_name=first_name,
+                last_name=last_name,
+                phone=phone,
+                email=email,
+                date_of_birth=datetime.strptime(data.get('dob', '2000-01-01'), '%Y-%m-%d').date() if data.get('dob') else datetime(2000, 1, 1).date(),
+                gender=data.get('gender', 'Other'),
+                status='inquiry',
+                department=data.get('department', 'General')
+            )
+            db.session.add(patient)
+            db.session.commit()
+        except Exception as e:
+            logging.error(f"Error creating patient: {str(e)}")
+            return jsonify({'error': 'Could not create patient record'}), 400
+    
+    # Create appointment request
+    try:
+        pref_date = datetime.fromisoformat(data.get('preferred_date')) if data.get('preferred_date') else None
+    except:
+        pref_date = None
+    
+    appt = AppointmentRequest(
+        patient_id=patient.id,
+        preferred_date=pref_date,
+        preferred_time=data.get('preferred_time'),
+        notes=data.get('reason', ''),
+        appointment_type=data.get('appointment_type', 'consultation'),
+        department=data.get('department', 'General'),
+        language_preference=data.get('language', 'en'),
+        urgency=data.get('urgency', 'normal'),
+        source='landing_page',
+        status='pending'
+    )
+    db.session.add(appt)
+    db.session.commit()
+    
+    # Try intelligent doctor allocation
+    allocated_doctor = allocate_appointment(appt)
+    if allocated_doctor:
+        appt.status = 'confirmed'
         db.session.commit()
-        return jsonify({'ok': True, 'appointment_id': appt.id, 'status': appt.status}), 201
-    except Exception as e:
-        logging.error(f"Error creating appointment request (patient/staff): {e}")
-        db.session.rollback()
-        return jsonify({'error': 'Could not create appointment request'}), 500
+    
+    return jsonify({
+        'ok': True,
+        'appointment_id': appt.id,
+        'patient_id': patient.id,
+        'patient_code': patient.patient_id,
+        'status': appt.status,
+        'message': 'Appointment request submitted. You will receive a confirmation.'
+    })
 
 
-@app.route('/api/patient/<int:patient_id>/summary')
-def patient_summary(patient_id):
-    """Return a short AI-influenced risk summary for a given patient (staff or patient access)."""
-    staff = get_staff_user()
-    if not staff and session.get('discharged_patient_id') != patient_id:
-        return jsonify({'error': 'Unauthorized'}), 401
-
-    try:
-        analysis = risk_predictor.analyze_patient_risk(patient_id)
-        return jsonify(analysis), 200
-    except Exception as e:
-        logging.error(f"Error computing summary for patient {patient_id}: {e}")
-        return jsonify({'error': 'Could not compute summary'}), 500
-
-
-@app.route('/discharged-logout')
-def discharged_logout():
-    """Logout discharged patient"""
-    session.pop('discharged_patient_id', None)
-    flash('You have been logged out.', 'info')
-    return redirect(url_for('discharged_portal'))
+@app.route('/patient-portal/medical-records')
+@patient_login_required
+def patient_medical_records_page():
+    """Medical records page for patient portal"""
+    patient = get_logged_in_patient()
+    
+    # Get all records
+    doctor_notes = DoctorNote.query.filter_by(patient_id=patient.id).order_by(DoctorNote.created_at.desc()).all()
+    treatments = TreatmentLog.query.filter_by(patient_id=patient.id).order_by(TreatmentLog.performed_at.desc()).all()
+    vitals = VitalSign.query.filter_by(patient_id=patient.id).order_by(VitalSign.recorded_at.desc()).limit(50).all()
+    medications = Medication.query.filter_by(patient_id=patient.id).all()
+    alerts = Alert.query.filter_by(patient_id=patient.id).order_by(Alert.created_at.desc()).limit(20).all()
+    
+    return render_template('patient_portal_medical_records.html',
+                         patient=patient,
+                         doctor_notes=doctor_notes,
+                         treatments=treatments,
+                         vitals=vitals,
+                         medications=medications,
+                         alerts=alerts)
 
 
 @app.errorhandler(404)
@@ -1505,3 +1761,692 @@ def not_found(e):
 @app.errorhandler(403)
 def forbidden(e):
     return render_template('403.html'), 403
+
+
+# ===== NURSE DASHBOARD MODIFICATIONS =====
+
+@app.route('/admin/wards', methods=['GET', 'POST'])
+@staff_login_required
+@admin_required
+def admin_wards():
+    staff = get_staff_user()
+    
+    if request.method == 'POST':
+        action = request.form.get('action')
+        
+        if action == 'create':
+            name = request.form.get('name')
+            capacity = request.form.get('capacity')
+            floor = request.form.get('floor')
+            
+            if Ward.query.filter_by(name=name).first():
+                flash('Ward with this name already exists.', 'danger')
+            else:
+                new_ward = Ward(name=name, capacity=capacity, floor=floor)
+                db.session.add(new_ward)
+                db.session.commit()
+                flash('Ward created successfully.', 'success')
+                
+        elif action == 'edit':
+            ward_id = request.form.get('ward_id')
+            ward = Ward.query.get_or_404(ward_id)
+            ward.name = request.form.get('name')
+            ward.capacity = request.form.get('capacity')
+            ward.floor = request.form.get('floor')
+            head_nurse_id = request.form.get('head_nurse_id')
+            if head_nurse_id:
+                ward.head_nurse_id = head_nurse_id
+            db.session.commit()
+            flash('Ward updated successfully.', 'success')
+            
+        return redirect(url_for('admin_wards'))
+
+    wards = Ward.query.order_by(Ward.name).all()
+    
+    # Calculate occupancy for each ward
+    ward_stats = []
+    for w in wards:
+        occupancy = Patient.query.filter_by(department=w.name, status='admitted').count()
+        ward_stats.append({
+            'ward': w,
+            'occupancy': occupancy,
+            'percent': int((occupancy / w.capacity) * 100) if w.capacity > 0 else 0
+        })
+        
+    nurses = StaffMember.query.filter_by(role='nurse').all()
+    return render_template('admin/wards.html', staff=staff, ward_stats=ward_stats, nurses=nurses)
+
+
+@app.route('/admin/assign-staff', methods=['GET', 'POST'])
+@staff_login_required
+@admin_required
+def admin_assign_staff():
+    staff_user = get_staff_user()
+    
+    if request.method == 'POST':
+        staff_id = request.form.get('staff_id')
+        new_dept = request.form.get('department')
+        
+        target_staff = StaffMember.query.get(staff_id)
+        if target_staff:
+            target_staff.department = new_dept
+            db.session.commit()
+            flash(f'Updated {target_staff.full_name} to {new_dept}.', 'success')
+        else:
+            flash('Staff member not found.', 'danger')
+            
+        return redirect(url_for('admin_assign_staff'))
+
+    all_staff = StaffMember.query.filter(StaffMember.role != 'admin').order_by(StaffMember.role, StaffMember.last_name).all()
+    wards = Ward.query.order_by(Ward.name).all()
+    
+    return render_template('admin/staff_assignment.html', staff=staff_user, all_staff=all_staff, wards=wards)
+    """Look up patient by ID for modification (returns partial HTML)"""
+    staff = get_staff_user()
+    patient_id_str = request.args.get('patient_id', '').strip()
+    
+    # Try exact match first, then case-insensitive
+    patient = Patient.query.filter_by(patient_id=patient_id_str).first()
+    if not patient:
+         patient = Patient.query.filter(Patient.patient_id.ilike(patient_id_str)).first()
+            
+    if not patient:
+        return jsonify({'error': 'Patient ID not found.'}), 404
+        
+    # Audit View (Nurse Lookup)
+    try:
+        log = AuditLog(
+            action='VIEW',
+            table_name='patients',
+            record_id=patient.id,
+            field_name='all',
+            old_value=None,
+            new_value='lookup_for_edit',
+            changed_by_id=staff.id
+        )
+        db.session.add(log)
+        db.session.commit()
+    except Exception as e:
+        logging.error(f"Audit Log Error: {e}")
+        
+    return render_template('nurse/edit_patient_partial.html', staff=staff, patient=patient)
+
+
+@app.route('/nurse/patient-lookup', methods=['GET'])
+@staff_login_required
+@role_required('nurse', 'admin')
+def nurse_patient_lookup():
+    """AJAX endpoint to lookup patient and return edit form"""
+    patient_id = request.args.get('patient_id', '').strip()
+    
+    if not patient_id:
+        return jsonify({'error': 'Patient ID required'}), 400
+    
+    patient = Patient.query.filter_by(patient_id=patient_id).first()
+    
+    if not patient:
+        return jsonify({'error': f'Patient {patient_id} not found'}), 404
+    
+    # Get existing medications
+    current_meds = Medication.query.filter_by(patient_id=patient.id, is_active=True).all()
+    
+    # Return HTML for edit form
+    html = f'''
+    <div class="alert alert-info">
+        <strong>{patient.full_name}</strong> - {patient.patient_id} | Room {patient.room_number or '-'} | Status: <span class="badge bg-primary">{patient.status.upper()}</span>
+    </div>
+    
+    <form class="row g-3" id="patientEditForm" data-patient-id="{patient.id}">
+        <div class="col-md-6">
+            <label for="diagnosis" class="form-label">Diagnosis</label>
+            <textarea class="form-control" id="diagnosis" name="diagnosis" rows="2">{patient.diagnosis or ''}</textarea>
+        </div>
+        
+        <div class="col-md-6">
+            <label for="notes" class="form-label">Medical Notes</label>
+            <textarea class="form-control" id="notes" name="notes" rows="2">{patient.notes or ''}</textarea>
+        </div>
+        
+        <div class="col-md-3">
+            <label for="room_number" class="form-label">Room Number</label>
+            <input type="text" class="form-control" id="room_number" name="room_number" value="{patient.room_number or ''}">
+        </div>
+        
+        <div class="col-md-3">
+            <label for="bed_number" class="form-label">Bed Number</label>
+            <input type="text" class="form-control" id="bed_number" name="bed_number" value="{patient.bed_number or ''}">
+        </div>
+        
+        <div class="col-md-6">
+            <label for="status" class="form-label">Status</label>
+            <select class="form-select" id="status" name="status">
+                <option value="admitted" {'selected' if patient.status == 'admitted' else ''}>Admitted</option>
+                <option value="icu" {'selected' if patient.status == 'icu' else ''}>ICU</option>
+                <option value="emergency" {'selected' if patient.status == 'emergency' else ''}>Emergency</option>
+                <option value="discharged" {'selected' if patient.status == 'discharged' else ''}>Discharged</option>
+            </select>
+        </div>
+        
+        <hr class="col-12">
+        
+        <!-- Medication Management Section -->
+        <div class="col-12">
+            <h6 class="mb-3"><i class="bi bi-capsule me-2"></i>Medication Management</h6>
+        </div>
+        
+        <div class="col-md-4">
+            <label for="medication_name" class="form-label">Medicine Name</label>
+            <input type="text" class="form-control" id="medication_name" placeholder="e.g., Aspirin, Ibuprofen">
+        </div>
+        
+        <div class="col-md-4">
+            <label for="medication_dosage" class="form-label">Dosage</label>
+            <select class="form-select" id="medication_dosage">
+                <option value="">-- Select Dosage --</option>
+                <option value="5mg">5 mg</option>
+                <option value="10mg">10 mg</option>
+                <option value="25mg">25 mg</option>
+                <option value="50mg">50 mg</option>
+                <option value="100mg">100 mg</option>
+                <option value="250mg">250 mg</option>
+                <option value="500mg">500 mg</option>
+                <option value="1000mg">1000 mg</option>
+                <option value="250ml">250 ml</option>
+                <option value="500ml">500 ml</option>
+                <option value="1 unit">1 unit</option>
+                <option value="2 units">2 units</option>
+                <option value="5 units">5 units</option>
+                <option value="10 units">10 units</option>
+                <option value="1 tablet">1 tablet</option>
+                <option value="2 tablets">2 tablets</option>
+                <option value="0.5 tablet">0.5 tablet</option>
+            </select>
+        </div>
+        
+        <div class="col-md-4">
+            <label for="medication_timing" class="form-label">Timing / Frequency</label>
+            <select class="form-select" id="medication_timing">
+                <option value="">-- Select Timing --</option>
+                <option value="Once daily">Once daily</option>
+                <option value="Twice daily">Twice daily (Morning & Evening)</option>
+                <option value="Three times daily">Three times daily (Morning, Afternoon, Evening)</option>
+                <option value="Four times daily">Four times daily</option>
+                <option value="Every 4 hours">Every 4 hours</option>
+                <option value="Every 6 hours">Every 6 hours</option>
+                <option value="Every 8 hours">Every 8 hours</option>
+                <option value="Every 12 hours">Every 12 hours</option>
+                <option value="As needed">As needed</option>
+            </select>
+        </div>
+        
+        <div class="col-md-4">
+            <label for="medication_route" class="form-label">Route</label>
+            <select class="form-select" id="medication_route">
+                <option value="oral" selected>Oral</option>
+                <option value="intravenous">Intravenous (IV)</option>
+                <option value="intramuscular">Intramuscular (IM)</option>
+                <option value="topical">Topical</option>
+                <option value="sublingual">Sublingual</option>
+                <option value="inhalation">Inhalation</option>
+            </select>
+        </div>
+        
+        <div class="col-md-8">
+            <label for="medication_notes" class="form-label">Notes</label>
+            <input type="text" class="form-control" id="medication_notes" placeholder="e.g., with food, after meals">
+        </div>
+        
+        <div class="col-12">
+            <button type="button" class="btn btn-info" id="addMedicationBtn">
+                <i class="bi bi-plus-circle me-2"></i>Add Medication
+            </button>
+        </div>
+        
+        <!-- Current Medications List -->
+        <div class="col-12" id="currentMedsSection" style="display: {'block' if current_meds else 'none'};">
+            <h6 class="mt-3 mb-3"><i class="bi bi-list-check me-2"></i>Current Medications</h6>
+            <div class="table-responsive">
+                <table class="table table-sm table-hover" id="currentMedicationsTable">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Medicine</th>
+                            <th>Dosage</th>
+                            <th>Frequency</th>
+                            <th>Route</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="currentMedsBody">
+    '''
+    
+    for med in current_meds:
+        html += f'''
+                        <tr data-med-id="{med.id}">
+                            <td><strong>{med.name}</strong></td>
+                            <td>{med.dosage}</td>
+                            <td>{med.frequency}</td>
+                            <td>{med.route or 'oral'}</td>
+                            <td>
+                                <button type="button" class="btn btn-sm btn-danger remove-med-btn" data-med-id="{med.id}">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </td>
+                        </tr>
+        '''
+    
+    html += f'''
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="col-12">
+            <button type="submit" class="btn btn-success">
+                <i class="bi bi-check-circle me-2"></i>Save Changes
+            </button>
+            <button type="reset" class="btn btn-secondary ms-2">
+                <i class="bi bi-x-circle me-2"></i>Reset
+            </button>
+        </div>
+    </form>
+    
+    <script>
+        // Store medications being added in session
+        let newMedications = [];
+        
+        document.getElementById('patientEditForm').addEventListener('submit', function(e) {{
+            e.preventDefault();
+            const patientId = this.getAttribute('data-patient-id');
+            const formData = new FormData(this);
+            
+            // Add new medications to form data
+            formData.append('new_medications', JSON.stringify(newMedications));
+            
+            fetch(`/nurse/update-patient/${{patientId}}`, {{
+                method: 'POST',
+                body: formData
+            }})
+            .then(response => response.json())
+            .then(data => {{
+                if (data.success) {{
+                    alert('Patient record and medications updated successfully!');
+                    location.reload();
+                }} else {{
+                    alert('Error: ' + (data.error || 'Unknown error'));
+                }}
+            }})
+            .catch(error => {{
+                alert('Error updating patient: ' + error.message);
+            }});
+        }});
+        
+        // Add medication button handler
+        document.getElementById('addMedicationBtn').addEventListener('click', function() {{
+            const medName = document.getElementById('medication_name').value.trim();
+            const medDosage = document.getElementById('medication_dosage').value;
+            const medTiming = document.getElementById('medication_timing').value;
+            const medRoute = document.getElementById('medication_route').value;
+            const medNotes = document.getElementById('medication_notes').value.trim();
+            
+            if (!medName) {{
+                alert('Please enter medicine name');
+                return;
+            }}
+            if (!medDosage) {{
+                alert('Please select dosage');
+                return;
+            }}
+            if (!medTiming) {{
+                alert('Please select timing/frequency');
+                return;
+            }}
+            
+            // Add to list
+            newMedications.push({{
+                name: medName,
+                dosage: medDosage,
+                frequency: medTiming,
+                route: medRoute,
+                notes: medNotes
+            }});
+            
+            // Add row to table
+            const tbody = document.getElementById('currentMedsBody');
+            const tr = document.createElement('tr');
+            tr.classList.add('table-success');
+            tr.innerHTML = `
+                <td><strong>${{medName}}</strong> <span class="badge bg-success ms-2">NEW</span></td>
+                <td>${{medDosage}}</td>
+                <td>${{medTiming}}</td>
+                <td>${{medRoute}}</td>
+                <td>
+                    <button type="button" class="btn btn-sm btn-danger remove-new-med-btn">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            `;
+            
+            // Remove button handler
+            tr.querySelector('.remove-new-med-btn').addEventListener('click', function() {{
+                tr.remove();
+                const idx = newMedications.findIndex(m => m.name === medName && m.dosage === medDosage);
+                if (idx > -1) newMedications.splice(idx, 1);
+                if (newMedications.length === 0 && document.querySelectorAll('#currentMedsBody tr').length === 0) {{
+                    document.getElementById('currentMedsSection').style.display = 'none';
+                }}
+            }});
+            
+            tbody.appendChild(tr);
+            document.getElementById('currentMedsSection').style.display = 'block';
+            
+            // Clear form
+            document.getElementById('medication_name').value = '';
+            document.getElementById('medication_dosage').value = '';
+            document.getElementById('medication_timing').value = '';
+            document.getElementById('medication_route').value = 'oral';
+            document.getElementById('medication_notes').value = '';
+            document.getElementById('medication_name').focus();
+        }});
+        
+        // Remove existing medications
+        document.querySelectorAll('.remove-med-btn').forEach(btn => {{
+            btn.addEventListener('click', function() {{
+                const medId = this.getAttribute('data-med-id');
+                fetch(`/api/medication/${{medId}}/deactivate`, {{
+                    method: 'POST',
+                    headers: {{'X-Requested-With': 'XMLHttpRequest'}}
+                }})
+                .then(response => response.json())
+                .then(data => {{
+                    if (data.success) {{
+                        this.closest('tr').remove();
+                        if (document.querySelectorAll('#currentMedsBody tr').length === 0 && newMedications.length === 0) {{
+                            document.getElementById('currentMedsSection').style.display = 'none';
+                        }}
+                    }} else {{
+                        alert('Error removing medication');
+                    }}
+                }});
+    </script>
+    '''
+    
+    return html
+
+
+@app.route('/nurse/update-patient/<int:patient_id>', methods=['POST'])
+@staff_login_required
+@role_required('nurse', 'admin')
+def update_patient_record(patient_id):
+    """Update patient record with audit trail and medications"""
+    staff = get_staff_user()
+    patient = Patient.query.get_or_404(patient_id)
+    
+    # Fields allowed to edit
+    editable_fields = ['diagnosis', 'notes', 'room_number', 'bed_number', 'status']
+    
+    changes_made = False
+    
+    try:
+        # Update existing fields
+        for field in editable_fields:
+            new_value = request.form.get(field)
+            if new_value is not None:
+                new_value = new_value.strip()
+                old_value = getattr(patient, field) or ''
+                
+                # Check if changed (handling None vs empty string)
+                if str(old_value) != str(new_value):
+                    # Record change
+                    setattr(patient, field, new_value)
+                    
+                    # Create Audit Log
+                    audit = AuditLog(
+                        action='UPDATE',
+                        table_name='patients',
+                        record_id=patient.id,
+                        field_name=field,
+                        old_value=str(old_value),
+                        new_value=new_value,
+                        changed_by_id=staff.id
+                    )
+                    db.session.add(audit)
+                    changes_made = True
+        
+        # Handle new medications
+        new_meds_json = request.form.get('new_medications', '[]')
+        try:
+            new_meds = json.loads(new_meds_json)
+            for med_data in new_meds:
+                if med_data.get('name') and med_data.get('dosage') and med_data.get('frequency'):
+                    # Calculate next_due based on frequency
+                    freq_hours = {
+                        'Once daily': 24,
+                        'Twice daily': 12,
+                        'Three times daily': 8,
+                        'Four times daily': 6,
+                        'Every 4 hours': 4,
+                        'Every 6 hours': 6,
+                        'Every 8 hours': 8,
+                        'Every 12 hours': 12,
+                        'As needed': 0
+                    }.get(med_data.get('frequency'), 24)
+                    
+                    from datetime import timedelta
+                    next_due = datetime.now() + timedelta(hours=freq_hours) if freq_hours > 0 else None
+                    
+                    medication = Medication(
+                        patient_id=patient_id,
+                        name=med_data.get('name'),
+                        dosage=med_data.get('dosage'),
+                        frequency=med_data.get('frequency'),
+                        route=med_data.get('route', 'oral'),
+                        start_date=datetime.now(),
+                        next_due=next_due,
+                        notes=med_data.get('notes', ''),
+                        is_active=True
+                    )
+                    db.session.add(medication)
+                    changes_made = True
+        except (json.JSONDecodeError, AttributeError):
+            logging.warning(f"Invalid medications JSON for patient {patient_id}")
+        
+        if changes_made:
+            patient.updated_at = datetime.now()
+            db.session.commit()
+            
+            # Create notification for assigned nurse if exists
+            if patient.assigned_nurse_id and patient.assigned_nurse_id != staff.id:
+                from models import Notification
+                notification = Notification(
+                    recipient_id=patient.assigned_nurse_id,
+                    notification_type='patient_update',
+                    title=f'Patient Record Updated: {patient.full_name}',
+                    message=f'{staff.full_name} updated patient record for {patient.full_name} (Room {patient.room_number}). New status: {patient.status.upper()}',
+                    patient_id=patient.id,
+                    is_read=False,
+                    is_acknowledged=False
+                )
+                db.session.add(notification)
+                db.session.commit()
+            
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': True, 'message': 'No changes detected'})
+            
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Error updating patient {patient_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/medication/<int:medication_id>/deactivate', methods=['POST'])
+@staff_login_required
+def deactivate_medication(medication_id):
+    """Deactivate a medication"""
+    try:
+        medication = Medication.query.get_or_404(medication_id)
+        medication.is_active = False
+        db.session.commit()
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Error deactivating medication {medication_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/nurse/notifications')
+@staff_login_required
+@role_required('nurse', 'admin')
+def get_nurse_notifications():
+    """Fetch unacknowledged notifications for the current nurse"""
+    staff = get_staff_user()
+    
+    # Get unacknowledged notifications for this nurse
+    from models import Notification
+    notifications = Notification.query.filter(
+        Notification.recipient_id == staff.id,
+        Notification.is_acknowledged == False
+    ).order_by(Notification.created_at.desc()).all()
+    
+    notification_list = []
+    for notif in notifications:
+        notification_list.append({
+            'id': notif.id,
+            'type': notif.notification_type,
+            'title': notif.title,
+            'message': notif.message,
+            'patient_id': notif.patient_id,
+            'patient_name': notif.patient.full_name if notif.patient else 'N/A',
+            'is_read': notif.is_read,
+            'created_at': notif.created_at.isoformat()
+        })
+    
+    return jsonify({
+        'success': True,
+        'count': len(notification_list),
+        'notifications': notification_list
+    }), 200
+
+
+@app.route('/api/notification/<int:notification_id>/acknowledge', methods=['POST'])
+@staff_login_required
+def acknowledge_notification(notification_id):
+    """Mark notification as acknowledged"""
+    try:
+        from models import Notification
+        notification = Notification.query.get_or_404(notification_id)
+        notification.is_acknowledged = True
+        notification.is_read = True
+        db.session.commit()
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Error acknowledging notification {notification_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/notification/<int:notification_id>/read', methods=['POST'])
+@staff_login_required
+def mark_notification_read(notification_id):
+    """Mark notification as read"""
+    try:
+        from models import Notification
+        notification = Notification.query.get_or_404(notification_id)
+        notification.is_read = True
+        db.session.commit()
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Error marking notification read {notification_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/book-appointment-public', methods=['POST'])
+def book_appointment_public():
+    """Handle public appointment requests from landing page"""
+    try:
+        # 1. Extract form data
+        first_name = request.form.get('first_name', '').strip()
+        last_name = request.form.get('last_name', '').strip()
+        email = request.form.get('email', '').strip()
+        phone = request.form.get('phone', '').strip()
+        dob_str = request.form.get('date_of_birth')
+        gender = request.form.get('gender')
+        pref_date_str = request.form.get('preferred_date')
+        pref_time = request.form.get('preferred_time')
+        problem = request.form.get('problem_description', '')
+
+        if not all([first_name, last_name, dob_str, gender, pref_date_str, pref_time]):
+            flash('Please fill in all required fields.', 'danger')
+            return redirect(url_for('index'))
+
+        # 2. Find or Create Patient
+        # Simple matching logic: email or phone
+        patient = None
+        if email:
+            patient = Patient.query.filter_by(email=email).first()
+        if not patient and phone:
+            patient = Patient.query.filter_by(phone=phone).first()
+            
+        if not patient:
+            # Generate new Patient ID
+            last_patient = Patient.query.order_by(Patient.id.desc()).first()
+            next_num = 1
+            if last_patient and last_patient.patient_id and last_patient.patient_id.startswith('PAT'):
+                try:
+                    next_num = int(last_patient.patient_id[3:]) + 1
+                except ValueError:
+                    pass
+            
+            new_patient_id = f"PAT{str(next_num).zfill(4)}"
+            
+            # Create new patient
+            try:
+                dob = datetime.strptime(dob_str, '%Y-%m-%d').date()
+            except ValueError:
+                flash('Invalid date format for Date of Birth.', 'danger')
+                return redirect(url_for('index'))
+
+            patient = Patient(
+                patient_id=new_patient_id,
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                phone=phone,
+                date_of_birth=dob,
+                gender=gender,
+                status='outpatient', # New status for these patients
+                diagnosis=problem # Initial diagnosis/complaint
+            )
+            db.session.add(patient)
+            db.session.commit()
+            logging.info(f"Created new patient {new_patient_id} for appointment request.")
+
+        # 3. Create Appointment Request
+        try:
+            pref_date = datetime.strptime(pref_date_str, '%Y-%m-%d')
+            # Combine if strictly needed, but model has separate fields
+        except ValueError:
+            flash('Invalid date format for Appointment Date.', 'danger')
+            return redirect(url_for('index'))
+
+        appt = AppointmentRequest(
+            patient_id=patient.id,
+            preferred_date=pref_date,
+            preferred_time=pref_time,
+            notes=problem,
+            status='pending',
+            source='landing_page',
+            appointment_type='consultation'
+        )
+        db.session.add(appt)
+        db.session.commit()
+
+        flash('Your appointment request has been submitted successfully! We will contact you shortly.', 'success')
+        return redirect(url_for('index'))
+
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Error in book_appointment_public: {e}")
+        flash('An error occurred while processing your request. Please try again.', 'danger')
+        return redirect(url_for('index'))

@@ -297,11 +297,16 @@
             </div>
             
             <div class="login-card">
-                <div class="login-header">
-                    <h2>Staff Login</h2>
-                    <p>Access your care coordination dashboard</p>
-                </div>
-                
+                <!-- Tabs -->
+                <ul class="nav nav-tabs mb-4" id="landingTabs" role="tablist" style="border-bottom: 2px solid #eee;">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="login-tab" data-bs-toggle="tab" data-bs-target="#login-panel" type="button" role="tab" aria-selected="true" style="color: #667eea; font-weight: 600;">Staff Login</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="appointment-tab" data-bs-toggle="tab" data-bs-target="#appointment-panel" type="button" role="tab" aria-selected="false" style="color: #667eea; font-weight: 600;">Book Appointment</button>
+                    </li>
+                </ul>
+
                 <div class="alerts-display">
                     {% with messages = get_flashed_messages(with_categories=true) %}
                         {% if messages %}
@@ -313,33 +318,119 @@
                         {% endif %}
                     {% endwith %}
                 </div>
-                
-                <form method="POST" action="{{ url_for('staff_login') }}">
-                    <div class="form-group">
-                        <label for="staff_id">Staff ID</label>
-                        <input type="text" id="staff_id" name="staff_id" placeholder="e.g., ADM0001" required autofocus>
+
+                <div class="tab-content" id="landingTabsContent">
+                    <!-- Login Panel -->
+                    <div class="tab-pane fade show active" id="login-panel" role="tabpanel" aria-labelledby="login-tab">
+                        <div class="login-header">
+                            <h2>Staff Login</h2>
+                            <p>Access your care coordination dashboard</p>
+                        </div>
+                        
+                        <form method="POST" action="{{ url_for('staff_login') }}">
+                            <div class="form-group">
+                                <label for="staff_id">Staff ID</label>
+                                <input type="text" id="staff_id" name="staff_id" placeholder="e.g., ADM0001" required>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="password">Password</label>
+                                <input type="password" id="password" name="password" placeholder="Enter your password" required>
+                            </div>
+                            
+                            <button type="submit" class="btn-login">
+                                <i class="bi bi-box-arrow-in-right me-2"></i>Login
+                            </button>
+                        </form>
+                        
+                        <div class="login-footer">
+                            <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
+                                Need help? <a href="{{ url_for('view_credentials') }}" class="demo-link">View Demo Credentials</a>
+                            </p>
+                            <div style="display:flex; flex-direction:column; gap:8px; align-items:center;">
+                                <a href="{{ url_for('init_data') }}" class="demo-link">Initialize Demo Data</a>
+                                <!-- Direct access to patient portal AI assistant -->
+                                <a href="{{ url_for('patient_portal_dashboard') }}" class="btn-login" style="width:100%; background:linear-gradient(135deg,#00c6ff 0%,#0072ff 100%); text-align:center; text-decoration:none; display:inline-block;">
+                                    <i class="bi bi-robot me-2"></i> Access Patient Portal
+                                </a>
+                            </div>
+                        </div>
                     </div>
-                    
-                    <div class="form-group">
-                        <label for="password">Password</label>
-                        <input type="password" id="password" name="password" placeholder="Enter your password" required>
-                    </div>
-                    
-                    <button type="submit" class="btn-login">
-                        <i class="bi bi-box-arrow-in-right me-2"></i>Login
-                    </button>
-                </form>
-                
-                <div class="login-footer">
-                    <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
-                        Need help? <a href="{{ url_for('view_credentials') }}" class="demo-link">View Demo Credentials</a>
-                    </p>
-                    <div style="display:flex; flex-direction:column; gap:8px; align-items:center;">
-                        <a href="{{ url_for('init_data') }}" class="demo-link">Initialize Demo Data</a>
-                        <!-- Direct access to discharged portal AI assistant -->
-                        <a href="{{ url_for('discharged_portal') }}" class="btn-login" style="width:100%; background:linear-gradient(135deg,#00c6ff 0%,#0072ff 100%);">
-                            <i class="bi bi-robot me-2"></i> Access Discharged AI Assistant
-                        </a>
+
+                    <!-- Appointment Panel -->
+                    <div class="tab-pane fade" id="appointment-panel" role="tabpanel" aria-labelledby="appointment-tab">
+                        <div class="login-header">
+                            <h2>New Appointment</h2>
+                            <p>Schedule a visit with our specialists</p>
+                        </div>
+                        
+                        <form method="POST" action="{{ url_for('book_appointment_public') }}">
+                            <div class="row">
+                                <div class="col-6 form-group">
+                                    <label>First Name</label>
+                                    <input type="text" name="first_name" required placeholder="John">
+                                </div>
+                                <div class="col-6 form-group">
+                                    <label>Last Name</label>
+                                    <input type="text" name="last_name" required placeholder="Doe">
+                                </div>
+                            </div>
+                            
+                            <div class="row">
+                                <div class="col-6 form-group">
+                                    <label>Phone</label>
+                                    <input type="tel" name="phone" required placeholder="123-456-7890">
+                                </div>
+                                <div class="col-6 form-group">
+                                    <label>Email</label>
+                                    <input type="email" name="email" required placeholder="john@example.com">
+                                </div>
+                            </div>
+
+                            <div class="row">
+                                <div class="col-6 form-group">
+                                    <label>Date of Birth</label>
+                                    <input type="date" name="date_of_birth" required>
+                                </div>
+                                <div class="col-6 form-group">
+                                    <label>Gender</label>
+                                    <select name="gender" class="form-select" style="padding: 12px 14px; border: 1px solid #ddd; border-radius: 8px; width: 100%; font-size: 14px;" required>
+                                        <option value="">Select...</option>
+                                        <option value="Male">Male</option>
+                                        <option value="Female">Female</option>
+                                        <option value="Other">Other</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <div class="row">
+                                <div class="col-6 form-group">
+                                    <label>Date</label>
+                                    <input type="date" name="preferred_date" required min="{{ now.strftime('%Y-%m-%d') }}">
+                                </div>
+                                <div class="col-6 form-group">
+                                    <label>Time</label>
+                                    <select name="preferred_time" class="form-select" style="padding: 12px 14px; border: 1px solid #ddd; border-radius: 8px; width: 100%; font-size: 14px;" required>
+                                        <option value="09:00">09:00 AM</option>
+                                        <option value="10:00">10:00 AM</option>
+                                        <option value="11:00">11:00 AM</option>
+                                        <option value="13:00">01:00 PM</option>
+                                        <option value="14:00">02:00 PM</option>
+                                        <option value="15:00">03:00 PM</option>
+                                        <option value="16:00">04:00 PM</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Problem Description</label>
+                                <textarea name="problem_description" class="form-control" rows="2" style="padding: 12px 14px; border: 1px solid #ddd; border-radius: 8px; width: 100%; font-size: 14px;" placeholder="Briefly describe your symptoms or reason for visit"></textarea>
+                            </div>
+
+                            <button type="submit" class="btn-login" style="background: linear-gradient(135deg, #00d4ff 0%, #005bea 100%);">
+                                <i class="bi bi-calendar-check me-2"></i>Book Appointment
+                            </button>
+                        </form>
                     </div>
                 </div>
             </div>

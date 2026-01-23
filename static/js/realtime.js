@@ -1,139 +1,91 @@
-let eventSource = null;
-let reconnectAttempts = 0;
-const maxReconnectAttempts = 5;
-
 document.addEventListener('DOMContentLoaded', function() {
+    // Only connect if realtime updates are enabled (set in dashboard_base.html)
     if (typeof enableRealTimeUpdates !== 'undefined' && enableRealTimeUpdates) {
-        startRealTimeUpdates();
-    }
-    
-    fetchActiveAlerts();
-});
-
-function startRealTimeUpdates() {
-    if (eventSource) {
-        eventSource.close();
-    }
-    
-    eventSource = new EventSource('/api/vitals/stream');
-    
-    eventSource.onopen = function() {
-        console.log('SSE connection established');
-        reconnectAttempts = 0;
-        updateConnectionStatus(true);
-    };
-    
-    eventSource.onmessage = function(event) {
-        try {
-            const data = JSON.parse(event.data);
-            processRealTimeData(data);
-        } catch (e) {
-            console.error('Error parsing SSE data:', e);
-        }
-    };
-    
-    eventSource.onerror = function(error) {
-        console.error('SSE error:', error);
-        updateConnectionStatus(false);
+        console.log('Initializing Real-Time Socket.IO connection...');
         
-        eventSource.close();
-        
-        if (reconnectAttempts < maxReconnectAttempts) {
-            reconnectAttempts++;
-            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-            console.log(`Reconnecting in ${delay/1000} seconds... (attempt ${reconnectAttempts})`);
-            setTimeout(startRealTimeUpdates, delay);
-        }
-    };
-}
+        const socket = io();
 
-function processRealTimeData(data) {
-    if (data.vitals && Array.isArray(data.vitals)) {
-        data.vitals.forEach(vital => {
-            updateVitalDisplay(vital.patient_id, vital);
+        socket.on('connect', function() {
+            console.log('Socket.IO Connected!');
+        });
+
+        socket.on('vital_update', function(data) {
+            console.log('Vital Update:', data);
+            updatePatientCard(data);
+        });
+
+        socket.on('new_alert', function(data) {
+            console.log('New Alert:', data);
+            handleNewAlert(data);
         });
     }
-    
-    if (data.alerts && Array.isArray(data.alerts) && data.alerts.length > 0) {
-        data.alerts.forEach(alert => {
-            if (alert.severity === 'critical') {
-                showEmergencyAlert(alert);
-            } else {
-                showAlertNotification(alert);
-            }
-        });
-        
-        updateAlertCount(data.alerts.length);
-    }
-}
-
-function showAlertNotification(alert) {
-    const container = document.getElementById('alertContainer');
-    if (!container) return;
-    
-    const notification = document.createElement('div');
-    notification.className = `alert alert-${alert.severity === 'critical' ? 'danger' : 'warning'} alert-dismissible fade show`;
-    notification.innerHTML = `
-        <strong><i class="bi bi-exclamation-triangle-fill me-2"></i>${alert.title}</strong>
-        <p class="mb-0 small">${alert.message}</p>
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
-    
-    container.appendChild(notification);
-    
-    setTimeout(() => {
-        notification.classList.remove('show');
-        setTimeout(() => notification.remove(), 150);
-    }, 10000);
-}
-
-function updateAlertCount(newAlerts) {
-    const badge = document.getElementById('alertCount');
-    if (badge) {
-        const current = parseInt(badge.textContent) || 0;
-        const total = current + newAlerts;
-        badge.textContent = total;
-        badge.style.display = total > 0 ? 'inline' : 'none';
-        
-        if (newAlerts > 0) {
-            const indicator = document.getElementById('alertIndicator');
-            if (indicator) {
-                indicator.classList.add('pulse-alert');
-                setTimeout(() => indicator.classList.remove('pulse-alert'), 1000);
-            }
-        }
-    }
-}
-
-function updateConnectionStatus(connected) {
-    const indicator = document.getElementById('liveIndicator');
-    if (indicator) {
-        if (connected) {
-            indicator.className = 'badge bg-success';
-            indicator.innerHTML = '<i class="bi bi-circle-fill me-1"></i>LIVE';
-        } else {
-            indicator.className = 'badge bg-warning';
-            indicator.innerHTML = '<i class="bi bi-circle me-1"></i>RECONNECTING...';
-        }
-    }
-}
-
-function fetchActiveAlerts() {
-    fetch('/api/alerts/active')
-        .then(response => response.json())
-        .then(alerts => {
-            const badge = document.getElementById('alertCount');
-            if (badge) {
-                const criticalCount = alerts.filter(a => a.severity === 'critical').length;
-                badge.textContent = criticalCount;
-                badge.style.display = criticalCount > 0 ? 'inline' : 'none';
-            }
-        })
-        .catch(error => console.error('Error fetching alerts:', error));
-}
-
-window.addEventListener('beforeunload', function() {
-    if (eventSource) {
-        eventSource.close();
-    }
 });
+
+function updatePatientCard(data) {
+    // Find the patient card
+    const card = document.querySelector(`.patient-card[data-patient-id="${data.patient_id}"]`);
+    if (!card) return;
+
+    // Update Vitals
+    updateVitalValue(card, 'heart_rate', data.heart_rate);
+    updateVitalValue(card, 'bp', `${data.bp_systolic}/${data.bp_diastolic}`);
+    updateVitalValue(card, 'oxygen', data.oxygen);
+    updateVitalValue(card, 'temperature', data.temperature);
+    
+    // Update Timestamp
+    const timestampElem = card.querySelector('[data-vital="timestamp"]');
+    if (timestampElem) timestampElem.textContent = data.timestamp;
+
+    // Update Status Color
+    card.classList.remove('patient-normal', 'patient-warning', 'patient-critical');
+    card.classList.add(`patient-${data.status}`);
+}
+
+function updateVitalValue(card, type, value) {
+    const elem = card.querySelector(`[data-vital="${type}"]`);
+    if (elem) {
+        // Add a highlight animation
+        elem.classList.add('vital-update-flash');
+        elem.textContent = value || '--';
+        setTimeout(() => elem.classList.remove('vital-update-flash'), 1000);
+    }
+}
+
+function handleNewAlert(data) {
+    // Check if user is admin - specific request to disable alerts for admins
+    if (typeof staffRole !== 'undefined' && staffRole === 'admin') {
+        console.log('Suppressing alert for admin role');
+        return;
+    }
+
+    // Play sound
+    if (typeof playAlertSound === 'function') {
+        playAlertSound();
+    }
+
+    // Show popup
+    if (typeof showEmergencyAlert === 'function') {
+        showEmergencyAlert({
+            id: data.id,
+            patient_name: data.patient_name,
+            room: data.room,
+            bed: data.bed,
+            message: data.message,
+            severity: data.severity
+        });
+    }
+}
+
+// Add CSS for update flash
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes flashHighlight {
+        0% { background-color: rgba(255, 255, 0, 0.5); }
+        100% { background-color: transparent; }
+    }
+    .vital-update-flash {
+        animation: flashHighlight 1s ease-out;
+        border-radius: 4px;
+    }
+`;
+document.head.appendChild(style);

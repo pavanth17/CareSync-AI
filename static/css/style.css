@@ -7,13 +7,13 @@
     --info-color: #0dcaf0;
     --dark-color: #212529;
     --light-color: #f8f9fa;
-    
+
     --vital-normal: #198754;
     --vital-warning: #ffc107;
     --vital-critical: #dc3545;
-    
+
     --sidebar-width: 250px;
-    --navbar-height: 56px;
+    --navbar-height: 70px;
 }
 
 * {
@@ -195,12 +195,24 @@ body {
     animation: pulse-ring 3s infinite;
 }
 
-.pulse-ring.delay-1 { animation-delay: 1s; }
-.pulse-ring.delay-2 { animation-delay: 2s; }
+.pulse-ring.delay-1 {
+    animation-delay: 1s;
+}
+
+.pulse-ring.delay-2 {
+    animation-delay: 2s;
+}
 
 @keyframes pulse-ring {
-    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
-    100% { transform: translate(-50%, -50%) scale(2); opacity: 0; }
+    0% {
+        transform: translate(-50%, -50%) scale(0.5);
+        opacity: 1;
+    }
+
+    100% {
+        transform: translate(-50%, -50%) scale(2);
+        opacity: 0;
+    }
 }
 
 .ecg-line {
@@ -223,12 +235,21 @@ body {
 }
 
 @keyframes ecg-draw {
-    to { stroke-dashoffset: 0; }
+    to {
+        stroke-dashoffset: 0;
+    }
 }
 
 @keyframes pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.1); }
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.1);
+    }
 }
 
 .login-page {
@@ -280,6 +301,13 @@ body {
     border-top: 1px solid #eee;
 }
 
+.navbar {
+    min-height: var(--navbar-height);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    position: relative;
+}
+
 .dashboard-page {
     padding-top: var(--navbar-height);
 }
@@ -287,6 +315,7 @@ body {
 .dashboard-container {
     display: flex;
     min-height: calc(100vh - var(--navbar-height));
+    width: 100%;
 }
 
 .sidebar {
@@ -294,10 +323,11 @@ body {
     background: white;
     border-right: 1px solid #e5e7eb;
     position: fixed;
-    top: var(--navbar-height);
+    top: calc(var(--navbar-height) + 1rem);
     bottom: 0;
     left: 0;
     overflow-y: auto;
+    z-index: 99;
 }
 
 .sidebar-content {
@@ -368,11 +398,17 @@ body {
     flex: 1;
     margin-left: var(--sidebar-width);
     padding: 1.5rem;
+    width: calc(100% - var(--sidebar-width));
 }
 
 @media (max-width: 991px) {
-    .sidebar { display: none; }
-    .main-content { margin-left: 0; }
+    .sidebar {
+        display: none;
+    }
+
+    .main-content {
+        margin-left: 0;
+    }
 }
 
 .page-header {
@@ -419,8 +455,15 @@ body {
 }
 
 @keyframes pulse-border {
-    0%, 100% { border-left-color: var(--danger-color); }
-    50% { border-left-color: transparent; }
+
+    0%,
+    100% {
+        border-left-color: var(--danger-color);
+    }
+
+    50% {
+        border-left-color: transparent;
+    }
 }
 
 .stat-icon {
@@ -505,8 +548,15 @@ body {
 }
 
 @keyframes critical-pulse {
-    0%, 100% { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }
-    50% { box-shadow: 0 0 20px rgba(220, 53, 69, 0.3); }
+
+    0%,
+    100% {
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    50% {
+        box-shadow: 0 0 20px rgba(220, 53, 69, 0.3);
+    }
 }
 
 .patient-header {
@@ -537,10 +587,25 @@ body {
     text-transform: uppercase;
 }
 
-.status-admitted { background: #e3f2fd; color: #1565c0; }
-.status-icu { background: #ffebee; color: #c62828; }
-.status-emergency { background: #fff3e0; color: #e65100; }
-.status-discharged { background: #e8f5e9; color: #2e7d32; }
+.status-admitted {
+    background: #e3f2fd;
+    color: #1565c0;
+}
+
+.status-icu {
+    background: #ffebee;
+    color: #c62828;
+}
+
+.status-emergency {
+    background: #fff3e0;
+    color: #e65100;
+}
+
+.status-discharged {
+    background: #e8f5e9;
+    color: #2e7d32;
+}
 
 .patient-location {
     font-size: 0.875rem;
@@ -573,8 +638,15 @@ body {
 }
 
 @keyframes vital-blink {
-    0%, 100% { background: #f8d7da; }
-    50% { background: #ffcdd2; }
+
+    0%,
+    100% {
+        background: #f8d7da;
+    }
+
+    50% {
+        background: #ffcdd2;
+    }
 }
 
 .vital-item i {
@@ -661,8 +733,13 @@ body {
     font-size: 1.5rem;
 }
 
-.alert-critical .alert-icon { color: var(--danger-color); }
-.alert-warning .alert-icon { color: var(--warning-color); }
+.alert-critical .alert-icon {
+    color: var(--danger-color);
+}
+
+.alert-warning .alert-icon {
+    color: var(--warning-color);
+}
 
 .alert-content {
     flex: 1;
@@ -806,8 +883,15 @@ body {
 }
 
 @keyframes emergency-border {
-    0%, 100% { border-color: var(--danger-color); }
-    50% { border-color: transparent; }
+
+    0%,
+    100% {
+        border-color: var(--danger-color);
+    }
+
+    50% {
+        border-color: transparent;
+    }
 }
 
 .emergency-header {
@@ -880,19 +964,19 @@ body {
     .feature-cards {
         grid-template-columns: 1fr;
     }
-    
+
     .credentials-grid {
         grid-template-columns: 1fr;
     }
-    
+
     .landing-visual {
         display: none;
     }
-    
+
     .patients-grid {
         grid-template-columns: 1fr;
     }
-    
+
     .vitals-display-large {
         grid-template-columns: repeat(2, 1fr);
     }

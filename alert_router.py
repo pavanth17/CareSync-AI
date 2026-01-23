@@ -3,8 +3,6 @@ import os
 import json
 import urllib.request
 from datetime import datetime
-from app import app, db
-from models import Patient, StaffMember, Alert
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -16,6 +14,7 @@ class AlertRouter:
         
     def get_on_duty_doctors(self):
         """Get all on-duty doctors"""
+        from models import StaffMember
         return StaffMember.query.filter(
             StaffMember.is_on_duty == True,
             StaffMember.is_active == True,
@@ -24,6 +23,7 @@ class AlertRouter:
     
     def get_on_duty_nurses(self):
         """Get all on-duty nurses"""
+        from models import StaffMember
         return StaffMember.query.filter(
             StaffMember.is_on_duty == True,
             StaffMember.is_active == True,
@@ -32,6 +32,7 @@ class AlertRouter:
     
     def route_by_department(self, patient, alert_severity):
         """Route to staff in patient's department"""
+        from models import StaffMember
         staff_list = StaffMember.query.filter(
             StaffMember.is_on_duty == True,
             StaffMember.is_active == True,
@@ -48,6 +49,7 @@ class AlertRouter:
     
     def route_by_specialty(self, patient, alert_severity):
         """Route to doctors with relevant specialization"""
+        from models import StaffMember
         if not patient.diagnosis:
             return self.route_by_availability()
         
@@ -84,6 +86,7 @@ class AlertRouter:
     
     def route_by_load_balance(self):
         """Route to least loaded on-duty staff"""
+        from models import Alert
         staff = self.route_by_availability()
         if not staff:
             return []
@@ -128,6 +131,7 @@ class AlertRouter:
     
     def distribute_alert(self, patient_id, alert_id, alert_severity):
         """Distribute alert to assigned doctor and nurses only when on-duty"""
+        from models import Patient, Alert, StaffMember
         patient = Patient.query.get(patient_id)
         alert = Alert.query.get(alert_id)
         

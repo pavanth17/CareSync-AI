@@ -222,4 +222,75 @@
     </div>
 </div>
 {% endif %}
+
+<script>
+    // Trigger emergency alert popup 30 seconds after dashboard loads (only once per session)
+    window.addEventListener('load', function() {
+        const alertTriggered = sessionStorage.getItem('emergencyAlertTriggered');
+        if (!alertTriggered) {
+            setTimeout(function() {
+                fetch('/api/trigger-emergency-alert', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        sessionStorage.setItem('emergencyAlertTriggered', 'true');
+                        // Show popup alert
+                        showEmergencyPopup({
+                            severity: data.severity,
+                            patient_name: data.patient_name,
+                            message: data.message,
+                            alert_id: data.alert_id
+                        });
+                        // Reload to show alert in alerts section
+                        location.reload();
+                    }
+                })
+                .catch(err => console.error('Error triggering alert:', err));
+            }, 30000); // 30 seconds
+        }
+    });
+
+    function showEmergencyPopup(alert) {
+        const title = alert.severity === 'critical' ? '🚨 CRITICAL EMERGENCY ALERT!' : '⚠️ EMERGENCY ALERT';
+        const message = `
+            <strong>${alert.patient_name}</strong><br>
+            <p>${alert.message}</p>
+        `;
+        
+        // Create modal if it doesn't exist
+        let modal = document.getElementById('emergencyAlertModal');
+        if (!modal) {
+            const modalHTML = `
+                <div class="modal fade" id="emergencyAlertModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                        <div class="modal-content bg-danger text-white">
+                            <div class="modal-header border-0">
+                                <h5 class="modal-title" id="emergencyTitle"></h5>
+                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body" id="emergencyMessage"></div>
+                            <div class="modal-footer border-0">
+                                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Acknowledge</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', modalHTML);
+            modal = document.getElementById('emergencyAlertModal');
+        }
+        
+        document.getElementById('emergencyTitle').textContent = title;
+        document.getElementById('emergencyMessage').innerHTML = message;
+        
+        const bsModal = new bootstrap.Modal(modal);
+        bsModal.show();
+    }
+</script>
 {% endblock %}

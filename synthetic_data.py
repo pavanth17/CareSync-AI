@@ -33,15 +33,15 @@ MEDICATIONS_LIST = [
     ("Aspirin", "81mg", "Once daily", "oral"),
     ("Metoprolol", "50mg", "Twice daily", "oral"),
     ("Lisinopril", "10mg", "Once daily", "oral"),
-    ("Metformin", "500mg", "Twice daily", "oral"),
+    ("Metformin", "500mg", "A tablet only afternoon after meals", "oral"),
     ("Atorvastatin", "40mg", "Once daily", "oral"),
-    ("Omeprazole", "20mg", "Once daily", "oral"),
+    ("Omeprazole", "20mg", "A tablet before breakfast at mrng", "oral"),
     ("Amlodipine", "5mg", "Once daily", "oral"),
-    ("Ceftriaxone", "1g", "Every 12 hours", "IV"),
-    ("Vancomycin", "1g", "Every 12 hours", "IV"),
-    ("Morphine", "2mg", "Every 4 hours PRN", "IV"),
-    ("Heparin", "5000 units", "Every 8 hours", "subcutaneous"),
-    ("Insulin Regular", "10 units", "Before meals", "subcutaneous"),
+    ("Ceftriaxone", "1g", "Twice daily", "IV"),
+    ("Vancomycin", "1g", "Twice daily", "IV"),
+    ("Morphine", "2mg", "As needed", "IV"),
+    ("Heparin", "5000 units", "A tablet 3 times a day after food", "subcutaneous"),
+    ("Insulin Regular", "10 units", "A tablet before breakfast at mrng", "subcutaneous"),
 ]
 
 
@@ -133,6 +133,48 @@ def create_synthetic_staff(num_doctors=2, num_nurses=3):
     return staff_created
 
 
+def create_ward_staff():
+    """Create specific staff for ward login demos"""
+    ward_staff = []
+    
+    # ICU Nurse
+    if not StaffMember.query.filter_by(staff_id="NRS_ICU").first():
+        icu_nurse = StaffMember(
+            staff_id="NRS_ICU",
+            first_name="Priya",
+            last_name="ICU",
+            email="icu.nurse@caresync.hospital",
+            phone="555-000-0001",
+            role="nurse",
+            department="ICU",
+            is_on_duty=True,
+            is_active=True
+        )
+        icu_nurse.set_password("nurse123")
+        db.session.add(icu_nurse)
+        ward_staff.append(icu_nurse)
+
+    # Emergency Nurse
+    if not StaffMember.query.filter_by(staff_id="NRS_ER").first():
+        er_nurse = StaffMember(
+            staff_id="NRS_ER",
+            first_name="Rahul",
+            last_name="Emergency",
+            email="er.nurse@caresync.hospital",
+            phone="555-000-0002",
+            role="nurse",
+            department="Emergency",
+            is_on_duty=True,
+            is_active=True
+        )
+        er_nurse.set_password("nurse123")
+        db.session.add(er_nurse)
+        ward_staff.append(er_nurse)
+
+    db.session.commit()
+    return ward_staff
+
+
 def create_synthetic_patients(num_patients=5, num_discharged=0):
     patients_created = []
     existing_count = Patient.query.count()
@@ -180,7 +222,8 @@ def create_synthetic_patients(num_patients=5, num_discharged=0):
             diagnosis=random.choice(DIAGNOSES),
             notes=f"Patient admitted for {random.choice(DIAGNOSES).lower()}. Regular monitoring required.",
             assigned_doctor_id=random.choice(doctors).id if doctors else None,
-            assigned_nurse_id=random.choice(nurses).id if nurses else None
+            assigned_nurse_id=random.choice(nurses).id if nurses else None,
+            department=random.choice(DEPARTMENTS) if status != 'discharged' else None
         )
         db.session.add(patient)
         patients_created.append(patient)
@@ -371,6 +414,9 @@ def initialize_synthetic_data(num_doctors=2, num_nurses=3, num_patients=5, num_d
 
     staff = create_synthetic_staff(num_doctors=num_doctors, num_nurses=num_nurses)
     print(f"Created {len(staff)} staff members")
+
+    ward_staff = create_ward_staff()
+    print(f"Created {len(ward_staff)} ward staff members")
 
     patients = create_synthetic_patients(num_patients=num_patients, num_discharged=num_discharged)
     print(f"Created {len(patients)} patients ({num_discharged} requested discharged)")

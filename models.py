@@ -82,6 +82,7 @@ class Patient(db.Model):
     assigned_nurse_id = db.Column(db.Integer, db.ForeignKey('staff_members.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+    department = db.Column(db.String(100), nullable=True)
 
     assigned_doctor = db.relationship('StaffMember', foreign_keys=[assigned_doctor_id], backref='patients_as_doctor')
     assigned_nurse = db.relationship('StaffMember', foreign_keys=[assigned_nurse_id], backref='patients_as_nurse')
@@ -99,6 +100,21 @@ class Patient(db.Model):
     @property
     def latest_vitals(self):
         return self.vitals.first()
+
+
+class Round(db.Model):
+    __tablename__ = 'rounds'
+    id = db.Column(db.Integer, primary_key=True)
+    doctor_id = db.Column(db.Integer, db.ForeignKey('staff_members.id'), nullable=False)
+    patient_id = db.Column(db.Integer, db.ForeignKey('patients.id'), nullable=False)
+    scheduled_time = db.Column(db.DateTime, nullable=False)
+    status = db.Column(db.String(20), default='pending')  # pending, completed, skipped
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+    doctor = db.relationship('StaffMember', backref='rounds')
+    patient = db.relationship('Patient', backref='rounds')
 
 
 class VitalSign(db.Model):
@@ -281,8 +297,23 @@ class ChatMessage(db.Model):
     message = db.Column(db.Text, nullable=False)
     language = db.Column(db.String(5), default='en')  # 'en', 'es', 'fr', 'hi'
     created_at = db.Column(db.DateTime, default=datetime.now)
+    is_helpful = db.Column(db.Boolean, nullable=True)
+    feedback_text = db.Column(db.Text, nullable=True)
     
     patient = db.relationship('Patient', backref='chat_messages')
+
+
+class Ward(db.Model):
+    __tablename__ = 'wards'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+    capacity = db.Column(db.Integer, default=20)
+    floor = db.Column(db.String(20), nullable=True)
+    head_nurse_id = db.Column(db.Integer, db.ForeignKey('staff_members.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+    head_nurse = db.relationship('StaffMember', foreign_keys=[head_nurse_id], backref='wards_managed')
 
 
 class AppointmentRequest(db.Model):
@@ -295,6 +326,47 @@ class AppointmentRequest(db.Model):
     doctor_id = db.Column(db.Integer, db.ForeignKey('staff_members.id'), nullable=True)
     status = db.Column(db.String(20), default='pending')  # pending, confirmed, cancelled
     notes = db.Column(db.Text, nullable=True)
+    appointment_type = db.Column(db.String(100), nullable=True)  # consultation, follow-up, emergency, routine
+    department = db.Column(db.String(100), nullable=True)  # Cardiology, Surgery, etc.
+    language_preference = db.Column(db.String(10), default='en')  # en, hi, te, ta, ml
+    urgency = db.Column(db.String(20), default='normal')  # normal, urgent, emergency
+    routing_score = db.Column(db.Float, nullable=True)  # AI routing optimization score
+    allocated_by_system = db.Column(db.Boolean, default=False)  # True if allocated by intelligent routing
+    source = db.Column(db.String(50), default='patient_portal')  # patient_portal, landing_page, staff
 
     patient = db.relationship('Patient', backref='appointment_requests')
     doctor = db.relationship('StaffMember', backref='received_appointments')
+
+
+class AuditLog(db.Model):
+    __tablename__ = 'audit_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    action = db.Column(db.String(50), nullable=False)  # UPDATE, CREATE, DELETE
+    table_name = db.Column(db.String(50), nullable=False)
+    record_id = db.Column(db.Integer, nullable=False)
+    field_name = db.Column(db.String(100), nullable=True)
+    old_value = db.Column(db.Text, nullable=True)
+    new_value = db.Column(db.Text, nullable=True)
+    changed_by_id = db.Column(db.Integer, db.ForeignKey('staff_members.id'), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.now)
+
+    changed_by = db.relationship('StaffMember', backref='audit_logs')
+
+
+class Notification(db.Model):
+    __tablename__ = 'notifications'
+    id = db.Column(db.Integer, primary_key=True)
+    recipient_id = db.Column(db.Integer, db.ForeignKey('staff_members.id'), nullable=False)
+    notification_type = db.Column(db.String(50), nullable=False)  # patient_update, alert, medication, etc.
+    title = db.Column(db.String(200), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    patient_id = db.Column(db.Integer, db.ForeignKey('patients.id'), nullable=True)
+    is_read = db.Column(db.Boolean, default=False)
+    is_acknowledged = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    # Relationships
+    recipient = db.relationship('StaffMember', backref='notifications')
+    patient = db.relationship('Patient', backref='notifications')
+

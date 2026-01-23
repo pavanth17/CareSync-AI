@@ -87,10 +87,10 @@
                 <div class="risk-history">
                     {% for assessment in risk_assessments[:5] %}
                     <div class="risk-item">
-                        <span class="badge badge-{{ 'danger' if assessment.risk_level in ['critical', 'high'] else 'warning' if assessment.risk_level == 'moderate' else 'success' }}">
-                            {{ assessment.risk_score }}
+                        <span class="badge badge-{{ 'danger' if assessment.risk_level in ['critical', 'high'] else 'warning' if assessment.risk_level == 'moderate' else 'success' }}" style="font-size: 0.9rem; min-width: 40px; text-align: center;">
+                            {{ assessment.risk_score or 0 }}
                         </span>
-                        <small>{{ assessment.assessed_at.strftime('%m/%d %H:%M') }}</small>
+                        <small class="text-muted">{{ assessment.assessed_at.strftime('%m/%d %H:%M') }}</small>
                     </div>
                     {% endfor %}
                 </div>

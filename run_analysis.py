@@ -32,4 +32,5 @@ if __name__ == "__main__":
         })
 
       print(json.dumps(results, indent=2, default=str))
-      print(f"Analyzed {len(results)} patients.")
+      import sys
+      print(f"Analyzed {len(results)} patients.", file=sys.stderr)

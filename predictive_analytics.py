@@ -4,9 +4,6 @@ import numpy as np
 from datetime import datetime, timedelta
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from app import db, genai, gemini_model
-from models import Patient, VitalSign, Alert
-from alert_router import send_to_n8n_webhook
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -42,6 +39,7 @@ class RiskPredictor:
         return slope
     
     def analyze_patient_risk(self, patient_id):
+        from models import VitalSign
         vitals = VitalSign.query.filter_by(patient_id=patient_id).order_by(
             VitalSign.recorded_at.desc()
         ).limit(20).all()
@@ -247,6 +245,7 @@ class RiskPredictor:
         Returns a dict with optional 'suggested_level' and 'suggested_score' and a note.
         This call is best-effort and will not raise on error.
         """
+        from app import genai, gemini_model
         if genai is None:
             return None
 
@@ -373,6 +372,9 @@ class RiskPredictor:
 
 def create_predictive_alert(patient_id, risk_analysis):
     # Only create alerts for high or critical risk to reduce noise
+    from app import db
+    from models import Patient, Alert
+    from alert_router import send_to_n8n_webhook
     if risk_analysis['risk_level'] not in ['critical', 'high']:
         return
     
@@ -416,6 +418,7 @@ risk_predictor = RiskPredictor()
 
 def analyze_all_patients():
     # Use a simple, non-transactional approach to avoid SQLAlchemy context issues
+    from models import Patient
     try:
         patients = Patient.query.filter(Patient.status.in_(['admitted', 'icu', 'emergency'])).all()
     except Exception as e:

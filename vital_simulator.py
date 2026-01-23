@@ -1,10 +1,6 @@
 import random
 import logging
 from datetime import datetime
-from app import app, db
-from models import Patient, VitalSign, Alert, StaffMember
-from synthetic_data import generate_vital_sign, check_vital_thresholds, create_alert
-from alert_router import alert_router, distribute_alerts_to_staff
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -13,6 +9,11 @@ alert_paths = {}
 
 def update_patient_vitals():
     global new_alerts
+    # Import inside function to avoid circular imports
+    from app import app, db
+    from models import Patient, VitalSign, Alert, StaffMember
+    from synthetic_data import generate_vital_sign, check_vital_thresholds, create_alert
+    from alert_router import distribute_alerts_to_staff
     
     with app.app_context():
         try:
@@ -36,7 +37,22 @@ def update_patient_vitals():
                 vital = generate_vital_sign(patient, status_bias)
                 db.session.add(vital)
                 db.session.commit()
-                
+                # Emit real-time update
+                try:
+                    from app import socketio
+                    socketio.emit('vital_update', {
+                        'patient_id': patient.id,
+                        'heart_rate': vital.heart_rate,
+                        'bp_systolic': vital.blood_pressure_systolic,
+                        'bp_diastolic': vital.blood_pressure_diastolic,
+                        'oxygen': vital.oxygen_saturation,
+                        'temperature': vital.temperature,
+                        'status': vital.status,
+                        'timestamp': vital.recorded_at.strftime('%H:%M:%S')
+                    })
+                except Exception as e:
+                    logging.error(f"Socket emit error: {e}")
+
                 alert_data = check_vital_thresholds(vital)
                 for alert in alert_data:
                     alert_obj = Alert(
@@ -56,6 +72,29 @@ def update_patient_vitals():
                         alert_obj.id
                     )
                     
+                    # Emit alert event only to assigned staff
+                    try:
+                        from app import socketio
+                        
+                        alert_payload = {
+                            'id': alert_obj.id,
+                            'patient_id': patient.id,
+                            'patient_name': patient.full_name,
+                            'title': alert['title'],
+                            'message': alert['message'],
+                            'severity': alert['severity'],
+                            'room': patient.room_number,
+                            'bed': patient.bed_number
+                        }
+                        
+                        # Emit to each recipient's personal room
+                        for recipient in recipients:
+                            socketio.emit('new_alert', alert_payload, to=f"staff_{recipient.id}")
+                            logging.debug(f"Emitted alert {alert_obj.id} to staff_{recipient.id}")
+                            
+                    except Exception as e:
+                        logging.error(f"Socket alert emit error: {e}")
+
                     routing_path = []
                     if recipients:
                         routing_path = [staff.staff_id for staff in recipients]
@@ -91,6 +130,8 @@ def get_and_clear_new_alerts():
 
 
 def get_live_patient_vitals():
+    from app import app
+    from models import Patient
     with app.app_context():
         patients = Patient.query.filter(Patient.status.in_(['admitted', 'icu', 'emergency'])).all()
         
@@ -115,3 +156,18 @@ def get_live_patient_vitals():
                 })
         
         return vitals_data
+
+def start_simulation(socketio_instance):
+    """Start the background simulation task"""
+    import time
+    
+    def simulation_task():
+        while True:
+            logging.info("Running simulation cycle...")
+            try:
+                update_patient_vitals()
+            except Exception as e:
+                logging.error(f"Error in simulation cycle: {e}")
+            time.sleep(5)
+
+    socketio_instance.start_background_task(simulation_task)

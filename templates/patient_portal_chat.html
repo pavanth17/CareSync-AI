@@ -1,0 +1,358 @@
+{% extends "patient_portal_base.html" %}
+
+{% block styles %}
+<style>
+    .chat-wrapper {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 180px);
+        /* Adjust based on header/padding */
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        overflow: hidden;
+    }
+
+    .messages-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+    }
+
+    .message {
+        display: flex;
+        flex-direction: column;
+        max-width: 80%;
+        animation: fadeIn 0.3s;
+    }
+
+    .message.patient {
+        align-self: flex-end;
+        align-items: flex-end;
+    }
+
+    .message.assistant {
+        align-self: flex-start;
+        align-items: flex-start;
+    }
+
+    .message-content {
+        padding: 12px 16px;
+        border-radius: 12px;
+        line-height: 1.4;
+        position: relative;
+    }
+
+    .patient .message-content {
+        background: #185a9d;
+        color: white;
+        border-bottom-right-radius: 2px;
+    }
+
+    .assistant .message-content {
+        background: #f1f3f5;
+        color: #333;
+        border-bottom-left-radius: 2px;
+    }
+
+    .message-time {
+        font-size: 0.75rem;
+        color: #999;
+        margin-top: 4px;
+    }
+
+    .input-area {
+        padding: 15px;
+        border-top: 1px solid #eee;
+        display: flex;
+        gap: 10px;
+        background: #fff;
+    }
+
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(5px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="header-bar py-2 mb-3">
+    <div class="d-flex align-items-center justify-content-between w-100">
+        <h4 class="mb-0">AI Health Assistant</h4>
+        <div class="d-flex gap-2">
+            <div class="btn-group" role="group">
+                <input type="radio" class="btn-check" name="language" id="lang_en" value="en" checked>
+                <label class="btn btn-outline-primary btn-sm" for="lang_en">English</label>
+
+                <input type="radio" class="btn-check" name="language" id="lang_hi" value="hi">
+                <label class="btn btn-outline-primary btn-sm" for="lang_hi">हिन्दी</label>
+
+                <input type="radio" class="btn-check" name="language" id="lang_te" value="te">
+                <label class="btn btn-outline-primary btn-sm" for="lang_te">తెలుగు</label>
+
+                <input type="radio" class="btn-check" name="language" id="lang_ta" value="ta">
+                <label class="btn btn-outline-primary btn-sm" for="lang_ta">தமிழ்</label>
+
+                <input type="radio" class="btn-check" name="language" id="lang_ml" value="ml">
+                <label class="btn btn-outline-primary btn-sm" for="lang_ml">മലയാളം</label>
+            </div>
+            <button id="newChatBtn" class="btn btn-sm btn-outline-secondary">New Chat</button>
+        </div>
+    </div>
+</div>
+
+<div class="chat-wrapper">
+    <div class="messages-container" id="messagesContainer">
+        {% if chat_history %}
+        {% for msg in chat_history %}
+        <div class="message {{ msg.role }}">
+            <div class="message-content">
+                {{ msg.message }}
+                {% if msg.role == 'assistant' %}
+                <div class="feedback-actions" data-id="{{ msg.id }}">
+                    <button class="btn-feedback {{ 'active' if msg.is_helpful is defined and msg.is_helpful == True }}"
+                        onclick="submitFeedback({{ msg.id }}, true)">👍</button>
+                    <button class="btn-feedback {{ 'active' if msg.is_helpful is defined and msg.is_helpful == False }}"
+                        onclick="submitFeedback({{ msg.id }}, false)">👎</button>
+                </div>
+                {% endif %}
+            </div>
+            <div class="message-time">{{ msg.created_at.strftime('%H:%M') }}</div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="text-center text-muted my-auto" id="emptyState">
+            <i class="bi bi-robot fs-1 mb-2"></i>
+            <h5>Hello, {{ patient.first_name }}!</h5>
+            <p>I'm here to help with your medical questions.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Quick Suggestions -->
+    <div class="quick-suggestions p-2 bg-light border-top">
+        <span class="badge rounded-pill bg-white text-dark border suggestion-chip"
+            onclick="useSuggestion('What are my current medications?')">💊 My Meds</span>
+        <span class="badge rounded-pill bg-white text-dark border suggestion-chip"
+            onclick="useSuggestion('What is my latest blood pressure?')">🩺 Latest Vitals</span>
+        <span class="badge rounded-pill bg-white text-dark border suggestion-chip"
+            onclick="useSuggestion('Explain my diagnosis')">📋 My Diagnosis</span>
+        <span class="badge rounded-pill bg-white text-dark border suggestion-chip"
+            onclick="useSuggestion('Do I have any upcoming appointments?')">🗓 Appointments</span>
+    </div>
+
+    <div class="input-area">
+        <input type="text" id="messageInput" class="form-control" placeholder="Type your health question..."
+            autocomplete="off">
+        <button id="sendBtn" class="btn btn-primary"><i class="bi bi-send-fill"></i></button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const messagesContainer = document.getElementById('messagesContainer');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const newChatBtn = document.getElementById('newChatBtn');
+    let newChatFlag = false;
+
+    // Scroll to bottom
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    function getSelectedLanguage() {
+        return document.querySelector('input[name="language"]:checked').value || 'en';
+    }
+
+    function useSuggestion(text) {
+        messageInput.value = text;
+        sendMessage();
+    }
+
+    async function sendMessage() {
+        const text = messageInput.value.trim();
+        if (!text) return;
+
+        // Add user message
+        addMessage(text, 'patient');
+        messageInput.value = '';
+
+        // Remove empty state
+        const emptyState = document.getElementById('emptyState');
+        if (emptyState) emptyState.remove();
+
+        // Loading state
+        sendBtn.disabled = true;
+        const loadingId = addLoadingIndicator();
+
+        try {
+            const resp = await fetch('/api/patient/{{ patient.id }}/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: text,
+                    language: getSelectedLanguage(),
+                    new_chat: newChatFlag
+                })
+            });
+
+            removeLoadingIndicator(loadingId);
+
+            if (resp.ok) {
+                const data = await resp.json();
+                addMessage(data.message, 'assistant', data.message_id);
+                newChatFlag = false; // Reset flag
+            } else {
+                addMessage('Error connecting to AI service.', 'assistant');
+            }
+        } catch (e) {
+            removeLoadingIndicator(loadingId);
+            addMessage('Network error.', 'assistant');
+        } finally {
+            sendBtn.disabled = false;
+            messageInput.focus();
+        }
+    }
+
+    function addMessage(text, role, msgId = null) {
+        const div = document.createElement('div');
+        div.className = `message ${role}`;
+
+        let feedbackHtml = '';
+        if (role === 'assistant' && msgId) {
+            feedbackHtml = `
+            <div class="feedback-actions" data-id="${msgId}">
+                <button class="btn-feedback" onclick="submitFeedback(${msgId}, true)">👍</button>
+                <button class="btn-feedback" onclick="submitFeedback(${msgId}, false)">👎</button>
+            </div>`;
+        }
+
+        // Convert markdown-style bullets to HTML
+        let fmtText = text.replace(/\n\*/g, '<br>•').replace(/\n/g, '<br>');
+
+        div.innerHTML = `
+            <div class="message-content">
+                ${fmtText}
+                ${feedbackHtml}
+            </div>
+            <div class="message-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+        `;
+        messagesContainer.appendChild(div);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    async function submitFeedback(msgId, isHelpful) {
+        // Visual update
+        const container = document.querySelector(`.feedback-actions[data-id="${msgId}"]`);
+        if (container) {
+            const buttons = container.querySelectorAll('button');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            // approximate finding the right button (0 is up, 1 is down)
+            if (isHelpful) buttons[0].classList.add('active');
+            else buttons[1].classList.add('active');
+        }
+
+        try {
+            await fetch(`/api/chat/feedback/${msgId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ is_helpful: isHelpful })
+            });
+        } catch (e) {
+            console.error('Feedback error', e);
+        }
+    }
+
+    function addLoadingIndicator() {
+        const id = 'loading-' + Date.now();
+        const div = document.createElement('div');
+        div.id = id;
+        div.className = 'message assistant';
+        div.innerHTML = `<div class="message-content"><div class="spinner-border spinner-border-sm text-secondary" role="status"></div> Typing...</div>`;
+        messagesContainer.appendChild(div);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        return id;
+    }
+
+    function removeLoadingIndicator(id) {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') sendMessage();
+    });
+
+    newChatBtn.addEventListener('click', async () => {
+        if (confirm('Clear chat history and start over?')) {
+            await fetch('/api/patient/{{ patient.id }}/clear-history', { method: 'POST' });
+            messagesContainer.innerHTML = '';
+            newChatFlag = true;
+        }
+    });
+
+</script>
+<style>
+    .suggestion-chip {
+        cursor: pointer;
+        transition: all 0.2s;
+        margin-right: 5px;
+    }
+
+    .suggestion-chip:hover {
+        background-color: #f0f0f0 !important;
+        transform: translateY(-1px);
+    }
+
+    .feedback-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+        justify-content: flex-end;
+        opacity: 0.6;
+        transition: opacity 0.2s;
+    }
+
+    .message-content:hover .feedback-actions {
+        opacity: 1;
+    }
+
+    .btn-feedback {
+        background: none;
+        border: none;
+        font-size: 1rem;
+        cursor: pointer;
+        padding: 0 4px;
+        opacity: 0.5;
+    }
+
+    .btn-feedback:hover {
+        opacity: 1;
+        transform: scale(1.1);
+    }
+
+    .btn-feedback.active {
+        opacity: 1;
+        transform: scale(1.2);
+    }
+
+    /* Quick suggestions scrolling */
+    .quick-suggestions {
+        overflow-x: auto;
+        white-space: nowrap;
+        scrollbar-width: thin;
+    }
+</style>
+{% endblock %}

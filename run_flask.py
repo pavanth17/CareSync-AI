@@ -8,10 +8,10 @@ logging.basicConfig(level=logging.DEBUG, format='%(levelname)s:%(name)s: %(messa
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Starting Flask app with error capture...")
+    print("Starting Flask app (with plain Flask, not SocketIO)...")
     print("=" * 60)
     try:
-        app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+        app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
     except KeyboardInterrupt:
         print("\nShutdown requested")
     except Exception as e:

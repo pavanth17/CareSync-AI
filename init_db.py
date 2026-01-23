@@ -29,12 +29,12 @@ def main(args):
         # Drop existing tables (safe when file is locked) and recreate tables from models
         try:
             db.drop_all()
-            print(f"✓ Dropped existing database tables")
+            print(f"[OK] Dropped existing database tables")
         except Exception:
             pass
 
         db.create_all()
-        print(f"✓ Created all database tables")
+        print(f"[OK] Created all database tables")
 
         # Generate synthetic data with requested demo counts
         initialize_synthetic_data(
@@ -43,7 +43,7 @@ def main(args):
             num_patients=args.patients,
             num_discharged=args.discharged
         )
-        print(f"✓ Generated synthetic data ({args.doctors} doctors, {args.nurses} nurses, {args.patients} patients; {args.discharged} discharged)")
+        print(f"[OK] Generated synthetic data ({args.doctors} doctors, {args.nurses} nurses, {args.patients} patients; {args.discharged} discharged)")
 
         # Print one example discharged patient for quick testing
         discharged_example = Patient.query.filter_by(status='discharged').first()
