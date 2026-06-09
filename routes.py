@@ -8,6 +8,7 @@ from app import app, db
 from models import StaffMember, Patient, VitalSign, Alert, Medication, TreatmentLog, MedicationAdministration, Shift, ShiftHandoff, DoctorNote, RiskAssessment, ChatMessage, LabReport, AppointmentRequest, AuditLog, Round, Ward
 # Removed Replit-specific auth integration; using local session-based auth instead
 from synthetic_data import initialize_synthetic_data
+from appointment_routing import allocate_appointment
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -616,6 +617,9 @@ def patient_detail(patient_id):
         tb = traceback.format_exc()
         app.logger.error('Error rendering patient_detail: %s', tb)
         return Response(tb, status=500, mimetype='text/plain')
+
+
+
 
 
 @app.route('/alert/<int:alert_id>/acknowledge', methods=['POST'])
@@ -1353,7 +1357,7 @@ def patient_portal_medications():
 @patient_login_required
 def patient_portal_appointments():
     patient = get_logged_in_patient()
-    appointments = AppointmentRequest.query.filter_by(patient_id=patient.id).order_by(AppointmentRequest.created_at.desc()).all()
+    appointments = AppointmentRequest.query.filter_by(patient_id=patient.id).order_by(AppointmentRequest.requested_at.desc()).all()
     doctors = StaffMember.query.filter_by(role='doctor').all()
     return render_template('patient_portal_appointments.html', patient=patient, appointments=appointments, doctors=doctors)
 
@@ -2450,3 +2454,5 @@ def book_appointment_public():
         logging.error(f"Error in book_appointment_public: {e}")
         flash('An error occurred while processing your request. Please try again.', 'danger')
         return redirect(url_for('index'))
+
+
